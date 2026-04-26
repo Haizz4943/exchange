@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/auth_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+
+server:
+  port: 8081
+
+logging:
+  level:
+    com.haizz.exchange.auth: INFO
+
+auth:
+  jwt:
+    algorithm: ${JWT_ALGORITHM:HS256}
+    secret: ${JWT_SECRET:change-me-in-prod-must-be-at-least-32-chars!}
+    private-key-path: ${JWT_PRIVATE_KEY_PATH:}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH:}
+    access-token-ttl-seconds: 3600
+    refresh-token-ttl-seconds: 604800
+    issuer: haizz-auth
+  rate-limit:
+    max-fail-attempts: 5
+    fail-window-seconds: 900
+    lockout-seconds: 600
+    max-ip-attempts: 20
+    ip-window-seconds: 900
+  sso:
+    enabled: ${AUTH_SSO_ENABLED:false}
+  kafka:
+    user-events-topic: user.events.v1
+  outbox:
+    relay-fixed-delay-ms: 100
+    relay-batch-size: 100

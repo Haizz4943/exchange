@@ -1,0 +1,13 @@
+spring:
+  jpa:
+    show-sql: true
+
+logging:
+  level:
+    com.haizz.exchange.auth: DEBUG
+    org.springframework.security: DEBUG
+
+auth:
+  jwt:
+    algorithm: HS256
+    secret: dev-secret-key-do-not-use-in-production-32x

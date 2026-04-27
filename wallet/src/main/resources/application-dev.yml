@@ -1,0 +1,12 @@
+spring:
+  jpa:
+    show-sql: true
+
+logging:
+  level:
+    com.haizz.exchange.wallet: DEBUG
+
+wallet:
+  jwt:
+    algorithm: HS256
+    secret: dev-secret-key-do-not-use-in-production-32x

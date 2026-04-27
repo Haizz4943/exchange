@@ -1,0 +1,44 @@
+# ── Maven ────────────────────────────────────────────────────
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# ── Spring Boot ──────────────────────────────────────────────
+*.jar
+*.war
+*.ear
+spring-shell.log
+
+# ── IDE ──────────────────────────────────────────────────────
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+*.code-workspace
+*.classpath
+*.project
+.settings/
+.factorypath
+.apt_generated/
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Environment / secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+application-prod.yml
+application-prod.properties
+
+# ── Claude Code ──────────────────────────────────────────────
+.claude/worktrees/
+
+# ── Docker ───────────────────────────────────────────────────
+.docker/

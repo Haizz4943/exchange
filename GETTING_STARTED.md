@@ -74,7 +74,7 @@ docker exec exchange-redis redis-cli ping
 ### Kiểm tra Kafka
 
 ```bash
-docker exec exchange-kafka kafka-topics.sh --bootstrap-server localhost:9092 --list
+docker exec exchange-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 ```
 
 ---
@@ -83,15 +83,8 @@ docker exec exchange-kafka kafka-topics.sh --bootstrap-server localhost:9092 --l
 
 ### Cách 1: Dùng Maven Wrapper (terminal)
 
-```bash
+```ps
 cd D:\Project\exchange\auth
-
-# Windows CMD
-set SPRING_PROFILES_ACTIVE=dev
-set JWT_SECRET=dev-secret-key-do-not-use-in-production-32x
-.\mvnw spring-boot:run
-
-# Windows PowerShell
 $env:SPRING_PROFILES_ACTIVE="dev"
 $env:JWT_SECRET="dev-secret-key-do-not-use-in-production-32x"
 .\mvnw spring-boot:run
@@ -176,7 +169,7 @@ curl -X POST http://localhost:8081/auth/login \
 
 ```bash
 curl http://localhost:8081/auth/me \
-  -H "Authorization: Bearer <access_token>"
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI4ZjJmNjZmOS04N2M5LTQ5NGMtODA2OS1iNmFhMjRhMDQwNTAiLCJzY29wZSI6InVzZXIiLCJpc3MiOiJoYWl6ei1hdXRoIiwiZXhwIjoxNzc3MjM3NDI1LCJpYXQiOjE3NzcyMzM4MjUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJqdGkiOiIxYTRiN2U2Yy1iNzgzLTQ0OWItODhiMS03YmVmMmQ5MDlmOGMifQ.C6amT5Eo4lQTKqm9_8pMrh09H8Wapgj5xYLSDUhybJ0"
 ```
 
 ### Refresh token
@@ -191,7 +184,7 @@ curl -X POST http://localhost:8081/auth/refresh \
 
 ```bash
 curl -X POST http://localhost:8081/auth/logout \
-  -H "Authorization: Bearer <access_token>" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI4ZjJmNjZmOS04N2M5LTQ5NGMtODA2OS1iNmFhMjRhMDQwNTAiLCJzY29wZSI6InVzZXIiLCJpc3MiOiJoYWl6ei1hdXRoIiwiZXhwIjoxNzc3MjM3NDI1LCJpYXQiOjE3NzcyMzM4MjUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJqdGkiOiIxYTRiN2U2Yy1iNzgzLTQ0OWItODhiMS03YmVmMmQ5MDlmOGMifQ.C6amT5Eo4lQTKqm9_8pMrh09H8Wapgj5xYLSDUhybJ0" \
   -H "Content-Type: application/json" \
   -d "{\"refresh_token\": \"<refresh_token>\"}"
 ```
@@ -201,7 +194,7 @@ curl -X POST http://localhost:8081/auth/logout \
 ```bash
 curl -X POST http://localhost:8081/internal/auth/validate-token \
   -H "Content-Type: application/json" \
-  -d "{\"token\": \"<access_token>\"}"
+  -d "{\"token\": \"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI4ZjJmNjZmOS04N2M5LTQ5NGMtODA2OS1iNmFhMjRhMDQwNTAiLCJzY29wZSI6InVzZXIiLCJpc3MiOiJoYWl6ei1hdXRoIiwiZXhwIjoxNzc3MjM3NDI1LCJpYXQiOjE3NzcyMzM4MjUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJqdGkiOiIxYTRiN2U2Yy1iNzgzLTQ0OWItODhiMS03YmVmMmQ5MDlmOGMifQ.C6amT5Eo4lQTKqm9_8pMrh09H8Wapgj5xYLSDUhybJ0\"}"
 ```
 
 ---
@@ -250,7 +243,7 @@ docker compose down -v
 
 ```
 Auth Service (port 8081)
-    ├── PostgreSQL :5432  →  database auth_db
+    ├── PostgreSQL :5432   →  database auth_db
     ├── Redis :6379        →  rate limiting
     └── Kafka :9092        →  publish UserRegistered event
 ```

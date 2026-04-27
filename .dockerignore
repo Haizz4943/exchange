@@ -1,0 +1,28 @@
+# VCS
+.git
+.gitignore
+
+# Claude
+.claude
+
+# Docs
+docs
+*.md
+
+# IDE
+.vscode
+.idea
+*.iml
+
+# Maven build output (các service khác)
+services/*/target
+
+# Log files
+*.log
+
+# Env secrets
+.env
+
+# Docker
+**/Dockerfile
+docker-compose*.yml

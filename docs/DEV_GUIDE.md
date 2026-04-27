@@ -295,6 +295,7 @@ docs: update DEV_GUIDE with Kafka topic catalog
 
 **PR process:** Self-review checklist (solo dev):
 
+- [ ] for claude's code code, write the summary for commit message
 - [ ] Tests pass locally (`mvn verify` / `npm test`)
 - [ ] No `System.out.println` or `console.log` left
 - [ ] New endpoints documented in service README

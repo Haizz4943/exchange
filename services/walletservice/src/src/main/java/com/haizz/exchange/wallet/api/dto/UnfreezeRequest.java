@@ -10,7 +10,7 @@ import java.util.UUID;
 public record UnfreezeRequest(
         @NotNull UUID userId,
         @NotBlank String assetCode,
-        @NotNull @DecimalMin(value = "0", exclusive = true) BigDecimal amount,
+        @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal amount,
         @NotBlank String referenceType,
         @NotBlank String referenceId,
         @NotBlank String reason

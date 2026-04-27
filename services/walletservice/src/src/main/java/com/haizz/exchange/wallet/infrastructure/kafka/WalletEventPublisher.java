@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.Map;
 
 @Slf4j
@@ -26,19 +25,18 @@ public class WalletEventPublisher {
     /** Enqueue a WalletTransaction event within the caller's DB transaction. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void enqueueWalletTransaction(WalletTransaction txn) {
-        Map<String, Object> payload = Map.of(
-                "txnId", txn.getTxnId().toString(),
-                "walletId", txn.getWalletId().toString(),
-                "userId", txn.getUserId().toString(),
-                "assetCode", txn.getAssetCode(),
-                "type", txn.getType().name(),
-                "deltaAvailable", txn.getDeltaAvailable(),
-                "deltaFrozen", txn.getDeltaFrozen(),
-                "deltaTotal", txn.getDeltaTotal(),
-                "referenceType", txn.getReferenceType(),
-                "referenceId", txn.getReferenceId(),
-                "createdAt", txn.getCreatedAt().toString()
-        );
+        Map<String, Object> payload = Map.of();
+        payload.put("txnId", txn.getTxnId().toString());
+        payload.put("walletId", txn.getWalletId().toString());
+        payload.put("userId", txn.getUserId().toString());
+        payload.put("assetCode", txn.getAssetCode());
+        payload.put("type", txn.getType().name());
+        payload.put("deltaAvailable", txn.getDeltaAvailable());
+        payload.put("deltaFrozen", txn.getDeltaFrozen());
+        payload.put("deltaTotal", txn.getDeltaTotal());
+        payload.put("referenceType", txn.getReferenceType());
+        payload.put("referenceId", txn.getReferenceId());
+        payload.put("createdAt", txn.getCreatedAt().toString());
 
         try {
             String json = objectMapper.writeValueAsString(payload);
@@ -50,7 +48,7 @@ public class WalletEventPublisher {
     }
 
     public void publishToKafka(KafkaTemplate<String, String> kafkaTemplate,
-                                String topic, WalletOutbox outbox) {
+            String topic, WalletOutbox outbox) {
         kafkaTemplate.send(topic, outbox.getAggregateId().toString(), outbox.getPayloadJson())
                 .whenComplete((result, ex) -> {
                     if (ex != null) {

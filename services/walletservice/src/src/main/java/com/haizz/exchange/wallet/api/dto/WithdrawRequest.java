@@ -6,8 +6,8 @@ import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
 
-public record DepositRequest(
+public record WithdrawRequest(
         @NotBlank String assetCode,
-        @NotNull @DecimalMin(value = "0", exclusive = true) BigDecimal amount,
+        @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal amount,
         @NotBlank String clientRequestId
 ) {}

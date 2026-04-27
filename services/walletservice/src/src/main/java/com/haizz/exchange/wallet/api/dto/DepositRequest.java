@@ -5,12 +5,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 
-public record FreezeRequest(
-        @NotNull UUID userId,
+public record DepositRequest(
         @NotBlank String assetCode,
-        @NotNull @DecimalMin(value = "0", exclusive = true) BigDecimal amount,
-        @NotBlank String referenceType,
-        @NotBlank String referenceId
+        @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal amount,
+        @NotBlank String clientRequestId
 ) {}

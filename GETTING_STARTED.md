@@ -107,7 +107,7 @@ $env:JWT_SECRET="dev-secret-key-do-not-use-in-production-32x"
       "name": "Auth Service",
       "request": "launch",
       "mainClass": "com.haizz.exchange.auth.AuthApplication",
-      "projectName": "auth",
+      "projectName": "auth", 
       "env": {
         "SPRING_PROFILES_ACTIVE": "dev",
         "JWT_SECRET": "dev-secret-key-do-not-use-in-production-32x"

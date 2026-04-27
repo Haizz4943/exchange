@@ -18,8 +18,8 @@
     <description>Haizz Exchange — Maven Parent POM</description>
 
     <modules>
-        <module>auth</module>
-        <module>wallet</module>
+        <module>services/auth</module>
+        <module>services/wallet</module>
     </modules>
 
     <properties>

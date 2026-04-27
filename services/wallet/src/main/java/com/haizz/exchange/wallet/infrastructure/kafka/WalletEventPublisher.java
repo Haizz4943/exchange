@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @Slf4j
@@ -25,7 +26,7 @@ public class WalletEventPublisher {
     /** Enqueue a WalletTransaction event within the caller's DB transaction. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void enqueueWalletTransaction(WalletTransaction txn) {
-        Map<String, Object> payload = Map.of();
+        Map<String, Object> payload = new HashMap<>();
         payload.put("txnId", txn.getTxnId().toString());
         payload.put("walletId", txn.getWalletId().toString());
         payload.put("userId", txn.getUserId().toString());

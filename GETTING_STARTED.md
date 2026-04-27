@@ -1,4 +1,4 @@
-# Getting Started — Haizz Exchange (Auth Service)
+# Getting Started — Haizz Exchange
 
 ## Yêu cầu
 
@@ -11,7 +11,7 @@
 | DB Client      | DBeaver   |
 | API Client     | Postman   |
 
-> Maven không cần cài riêng — dùng `mvnw` wrapper có sẵn trong project.
+> Maven không cần cài riêng — dùng `mvnw` wrapper có sẵn trong từng service.
 
 ---
 
@@ -79,45 +79,19 @@ docker exec exchange-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loc
 
 ---
 
-## Bước 3 — Chạy Auth Service
+## Bước 3 — Chạy Auth Service (port 8081)
 
 ### Cách 1: Dùng Maven Wrapper (terminal)
 
 ```ps
-cd D:\Project\exchange\auth
+cd D:\Project\exchange\services\auth
 $env:SPRING_PROFILES_ACTIVE="dev"
-$env:JWT_SECRET="dev-secret-key-do-not-use-in-production-32x"
 .\mvnw spring-boot:run
 ```
 
 ### Cách 2: Dùng VS Code
 
-1. Mở VS Code → **File → Open Folder** → chọn `D:\Project\exchange`
-2. Cài extensions nếu chưa có:
-   - **Extension Pack for Java** (Microsoft)
-   - **Spring Boot Extension Pack** (VMware)
-3. Tạo file `.vscode/launch.json` (nếu chưa có) với nội dung:
-
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "type": "java",
-      "name": "Auth Service",
-      "request": "launch",
-      "mainClass": "com.haizz.exchange.auth.AuthApplication",
-      "projectName": "auth", 
-      "env": {
-        "SPRING_PROFILES_ACTIVE": "dev",
-        "JWT_SECRET": "dev-secret-key-do-not-use-in-production-32x"
-      }
-    }
-  ]
-}
-```
-
-4. Nhấn **F5** hoặc vào tab **Run and Debug** (Ctrl+Shift+D) → chọn **Auth Service** → **Start Debugging**
+Xem cấu hình launch.json ở Bước 5.
 
 ### Service đã start thành công khi thấy log:
 
@@ -128,9 +102,78 @@ Tomcat started on port 8081
 
 ---
 
-## Bước 4 — Test API
+## Bước 4 — Chạy Wallet Service (port 8082)
 
-### Đăng ký tài khoản
+Wallet Service cần Auth Service đang chạy để nhận event `UserRegistered` qua Kafka và tự động tạo ví cho user mới.
+
+### Cách 1: Dùng Maven Wrapper (terminal)
+
+Mở **terminal mới** (giữ Auth Service đang chạy):
+
+```ps
+cd D:\Project\exchange\services\wallet
+$env:SPRING_PROFILES_ACTIVE="dev"
+.\mvnw spring-boot:run
+```
+
+### Cách 2: Dùng VS Code
+
+Xem cấu hình launch.json ở Bước 5.
+
+### Service đã start thành công khi thấy log:
+
+```
+Started WalletApplication in X.XXX seconds
+Tomcat started on port 8082
+```
+
+---
+
+## Bước 5 — Cấu hình VS Code (chạy cả hai service)
+
+Tạo hoặc cập nhật file `.vscode/launch.json` tại root project:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Auth Service",
+      "request": "launch",
+      "mainClass": "com.haizz.exchange.auth.AuthApplication",
+      "projectName": "auth",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "dev"
+      }
+    },
+    {
+      "type": "java",
+      "name": "Wallet Service",
+      "request": "launch",
+      "mainClass": "com.haizz.exchange.wallet.WalletApplication",
+      "projectName": "wallet",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "dev"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "All Services",
+      "configurations": ["Auth Service", "Wallet Service"]
+    }
+  ]
+}
+```
+
+Nhấn **F5** hoặc vào tab **Run and Debug** (Ctrl+Shift+D) → chọn **Auth Service**, **Wallet Service**, hoặc **All Services**.
+
+---
+
+## Bước 6 — Test API
+
+### Auth: Đăng ký tài khoản
 
 ```bash
 curl -X POST http://localhost:8081/auth/register \
@@ -147,7 +190,9 @@ curl -X POST http://localhost:8081/auth/register \
 }
 ```
 
-### Đăng nhập
+> Wallet Service sẽ tự động nhận event từ Kafka và tạo ví cho user này.
+
+### Auth: Đăng nhập — lấy token
 
 ```bash
 curl -X POST http://localhost:8081/auth/login \
@@ -165,14 +210,16 @@ curl -X POST http://localhost:8081/auth/login \
 }
 ```
 
-### Lấy thông tin user (cần Bearer token)
+Lưu `access_token` để dùng cho các request sau (thay `<TOKEN>` bên dưới).
+
+### Auth: Lấy thông tin user
 
 ```bash
 curl http://localhost:8081/auth/me \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI4ZjJmNjZmOS04N2M5LTQ5NGMtODA2OS1iNmFhMjRhMDQwNTAiLCJzY29wZSI6InVzZXIiLCJpc3MiOiJoYWl6ei1hdXRoIiwiZXhwIjoxNzc3MjM3NDI1LCJpYXQiOjE3NzcyMzM4MjUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJqdGkiOiIxYTRiN2U2Yy1iNzgzLTQ0OWItODhiMS03YmVmMmQ5MDlmOGMifQ.C6amT5Eo4lQTKqm9_8pMrh09H8Wapgj5xYLSDUhybJ0"
+  -H "Authorization: Bearer <TOKEN>"
 ```
 
-### Refresh token
+### Auth: Refresh token
 
 ```bash
 curl -X POST http://localhost:8081/auth/refresh \
@@ -180,34 +227,89 @@ curl -X POST http://localhost:8081/auth/refresh \
   -d "{\"refresh_token\": \"<refresh_token>\"}"
 ```
 
-### Logout
+### Auth: Logout
 
 ```bash
 curl -X POST http://localhost:8081/auth/logout \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI4ZjJmNjZmOS04N2M5LTQ5NGMtODA2OS1iNmFhMjRhMDQwNTAiLCJzY29wZSI6InVzZXIiLCJpc3MiOiJoYWl6ei1hdXRoIiwiZXhwIjoxNzc3MjM3NDI1LCJpYXQiOjE3NzcyMzM4MjUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJqdGkiOiIxYTRiN2U2Yy1iNzgzLTQ0OWItODhiMS03YmVmMmQ5MDlmOGMifQ.C6amT5Eo4lQTKqm9_8pMrh09H8Wapgj5xYLSDUhybJ0" \
+  -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d "{\"refresh_token\": \"<refresh_token>\"}"
 ```
 
-### Validate token (internal endpoint — dành cho Gateway)
+### Auth: Validate token (internal — dành cho Gateway)
 
 ```bash
 curl -X POST http://localhost:8081/internal/auth/validate-token \
   -H "Content-Type: application/json" \
-  -d "{\"token\": \"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI4ZjJmNjZmOS04N2M5LTQ5NGMtODA2OS1iNmFhMjRhMDQwNTAiLCJzY29wZSI6InVzZXIiLCJpc3MiOiJoYWl6ei1hdXRoIiwiZXhwIjoxNzc3MjM3NDI1LCJpYXQiOjE3NzcyMzM4MjUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJqdGkiOiIxYTRiN2U2Yy1iNzgzLTQ0OWItODhiMS03YmVmMmQ5MDlmOGMifQ.C6amT5Eo4lQTKqm9_8pMrh09H8Wapgj5xYLSDUhybJ0\"}"
+  -d "{\"token\": \"<TOKEN>\"}"
 ```
 
 ---
 
-## Bước 5 — Build & Package
+### Wallet: Xem ví của tôi
 
 ```bash
-# Build có chạy tests (cần Docker đang chạy)
-cd D:\Project\exchange
-.\auth\mvnw clean install -pl auth -am
+curl http://localhost:8082/api/v1/wallets/me \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+**Response 200:**
+```json
+{
+  "wallets": [
+    { "assetCode": "USDT", "totalBalance": "0", "availableBalance": "0", "frozenBalance": "0" },
+    { "assetCode": "BTC",  "totalBalance": "0", "availableBalance": "0", "frozenBalance": "0" }
+  ]
+}
+```
+
+### Wallet: Nạp tiền (deposit)
+
+```bash
+curl -X POST http://localhost:8082/api/v1/deposits \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"assetCode\": \"USDT\", \"amount\": \"100.00\", \"clientRequestId\": \"dep-001\"}"
+```
+
+### Wallet: Xem lịch sử nạp tiền
+
+```bash
+curl "http://localhost:8082/api/v1/deposits?page=0&size=20" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+### Wallet: Rút tiền (withdrawal)
+
+```bash
+curl -X POST http://localhost:8082/api/v1/withdrawals \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"assetCode\": \"USDT\", \"amount\": \"50.00\", \"clientRequestId\": \"wd-001\"}"
+```
+
+### Wallet: Xem lịch sử giao dịch
+
+```bash
+curl "http://localhost:8082/api/v1/wallet-transactions?page=0&size=50" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+---
+
+## Bước 7 — Build & Package
+
+```bash
+# Build Auth Service (có tests)
+cd D:\Project\exchange\services\auth
+.\mvnw clean package
+
+# Build Wallet Service (có tests)
+cd D:\Project\exchange\services\wallet
+.\mvnw clean package
 
 # Build không chạy tests (nhanh hơn)
-.\auth\mvnw clean install -pl auth -am -DskipTests
+.\mvnw clean package -DskipTests
 ```
 
 ---
@@ -229,13 +331,16 @@ docker compose down -v
 
 ## Troubleshooting
 
-| Lỗi                                         | Nguyên nhân                             | Fix                                               |
-| ------------------------------------------- | --------------------------------------- | ------------------------------------------------- |
-| `Connection to localhost:5432 refused`      | PostgreSQL chưa start hoặc chưa healthy | `docker compose up -d && docker compose ps`       |
-| `Could not find a valid Docker environment` | Docker Desktop chưa mở                  | Mở Docker Desktop                                 |
-| `auth_db does not exist`                    | Init script chưa chạy (volumes cũ)      | `docker compose down -v && docker compose up -d`  |
-| Port 5432/6379/9092 đã bị chiếm             | App khác đang dùng port                 | Tắt app đó hoặc đổi port trong docker-compose.yml |
-| `PASSWORD_TOO_WEAK` khi register            | Password thiếu chữ hoa hoặc số          | Dùng VD: `Secret1234`                             |
+| Lỗi                                              | Nguyên nhân                                    | Fix                                                                                                          |
+| ------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `Connection to localhost:5432 refused`           | PostgreSQL chưa start hoặc chưa healthy        | `docker compose up -d && docker compose ps`                                                                  |
+| `Could not find a valid Docker environment`      | Docker Desktop chưa mở                         | Mở Docker Desktop                                                                                            |
+| `auth_db / wallet_db does not exist`             | Init script chưa chạy (volumes cũ)             | `docker compose down -v && docker compose up -d`                                                             |
+| Port 5432/6379/9092 đã bị chiếm                 | App khác đang dùng port                        | Tắt app đó hoặc đổi port trong docker-compose.yml                                                           |
+| `PASSWORD_TOO_WEAK` khi register                 | Password thiếu chữ hoa hoặc số                 | Dùng VD: `Secret1234`                                                                                        |
+| `missing table [deposit_records]`                | Migration V1 đã apply trước khi có bảng này    | Flyway V2 sẽ tự tạo lại khi restart. Hoặc reset DB: `docker compose down -v && docker compose up -d`       |
+| Wallet không tạo ví sau khi register             | Kafka chưa healthy hoặc Wallet Service chưa up | Chờ Kafka healthy rồi start lại Wallet Service                                                               |
+| `401 Unauthorized` khi gọi Wallet API            | Token hết hạn hoặc sai                         | Đăng nhập lại lấy token mới                                                                                  |
 
 ---
 
@@ -243,7 +348,13 @@ docker compose down -v
 
 ```
 Auth Service (port 8081)
-    ├── PostgreSQL :5432   →  database auth_db
-    ├── Redis :6379        →  rate limiting
-    └── Kafka :9092        →  publish UserRegistered event
+    ├── PostgreSQL :5432  →  auth_db
+    ├── Redis :6379       →  rate limiting
+    └── Kafka :9092       →  publish user.events.v1
+
+Wallet Service (port 8082)
+    ├── PostgreSQL :5432  →  wallet_db
+    └── Kafka :9092       →  consume user.events.v1
+                          →  consume trade.executed
+                          →  publish wallet.transactions.v1
 ```

@@ -487,7 +487,7 @@ docker-compose up --build
 | `redis` | `redis:7-alpine` | 6379 | 6379 | Cache, rate limiting, dedup |
 | `kafka` | `apache/kafka:3.7.0` | 9092 | 9092 | Event bus (KRaft mode, no Zookeeper) |
 | `auth-service` | Built from Dockerfile | 8081 | — | Identity & JWT |
-| `wallet-service` | Built from Dockerfile | 8082 | — | Balances & audit |
+| `wallet-service` | Built from Dockerfile | 8082 | — | Balances & audit | 
 | `order-service` | Built from Dockerfile | 8083 | — | Order lifecycle |
 | `matching-engine` | Built from Dockerfile | 8084 | — | Simulated fills |
 | `market-data-service` | Built from Dockerfile | 8085 | — | Binance data + UDF |

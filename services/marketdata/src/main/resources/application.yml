@@ -1,0 +1,142 @@
+spring:
+  application:
+    name: market-data-service
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+  datasource:
+    url: jdbc:postgresql://postgres-timescale:5432/marketdata_db
+    username: ${DB_USER:marketdata_user}
+    password: ${DB_PASSWORD:secret}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  flyway:
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      compression-type: lz4
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        retries: 10
+        delivery.timeout.ms: 60000
+
+server:
+  port: 8085
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+market:
+  data:
+    provider: binance
+  pairs:
+    - BTCUSDT
+    - ETHUSDT
+    - BNBUSDT
+    - SOLUSDT
+    - XRPUSDT
+  intervals:
+    - 1m
+    - 5m
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  backfill:
+    initial-history:
+      1m: 30
+      5m: 60
+      15m: 90
+      1h: 90
+      4h: 365
+      1d: 365
+    gap-check-interval-ms: 300000
+  health:
+    check-interval-ms: 5000
+    stale-threshold-ms: 2000
+    degraded-threshold-ms: 10000
+    degraded-event-threshold-ms: 30000
+  exchange-info:
+    refresh-interval-ms: 86400000
+
+binance:
+  rest:
+    base-url: https://api.binance.com
+    connect-timeout: 2000
+    read-timeout: 10000
+  ws:
+    base-url: wss://stream.binance.com:9443
+    reconnect:
+      initial-delay-ms: 1000
+      max-delay-ms: 60000
+      multiplier: 2
+  kline:
+    use-ws: false
+
+outbox:
+  relay:
+    enabled: true
+    poll-interval-ms: 100
+    batch-size: 100
+    max-attempts: 10
+
+resilience4j:
+  ratelimiter:
+    instances:
+      binanceRest:
+        limit-for-period: 10
+        limit-refresh-period: 1s
+        timeout-duration: 5s
+  circuitbreaker:
+    instances:
+      binanceRest:
+        failure-rate-threshold: 50
+        sliding-window-size: 20
+        wait-duration-in-open-state: 30s
+        register-health-indicator: true
+
+logging:
+  level:
+    root: INFO
+    com.haizz.exchange.marketdata: DEBUG
+    com.haizz.exchange.marketdata.infrastructure.provider.binance: INFO
+    reactor.netty.http.client: WARN
+    org.springframework.kafka: WARN

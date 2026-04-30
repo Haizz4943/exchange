@@ -59,6 +59,24 @@ services:
       timeout: 10s
       retries: 15
 
+  # ── TimescaleDB (Market Data) ───────────────────────────────────
+  postgres-timescale:
+    image: timescale/timescaledb:2.14-pg15
+    container_name: exchange-timescale
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
+      POSTGRES_DB: marketdata_db
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d marketdata_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # # ── Wallet Service ──────────────────────────────────────────
   # wallet-service:
   #   build:
@@ -89,3 +107,4 @@ volumes:
   postgres_data:
   redis_data:
   kafka_data:
+  timescale_data:

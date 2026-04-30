@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/marketdata_db
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+logging:
+  level:
+    com.haizz.exchange.marketdata: DEBUG
+    reactor.netty.http.client: DEBUG

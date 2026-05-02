@@ -2,8 +2,7 @@ package com.haizz.exchange.marketdata.config;
 
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -19,7 +18,12 @@ public class KafkaConfig {
 
     @Bean
     public ProducerFactory<String, String> durableProducerFactory(KafkaProperties kafkaProperties) {
-        Map<String, Object> props = new HashMap<>(kafkaProperties.buildProducerProperties(null));
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaProperties.getBootstrapServers());
+        if (kafkaProperties.getProducer().getProperties() != null) {
+            props.putAll(kafkaProperties.getProducer().getProperties());
+        }
+        // Override with durable settings
         props.put(ProducerConfig.ACKS_CONFIG, "all");
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
@@ -33,7 +37,12 @@ public class KafkaConfig {
 
     @Bean
     public ProducerFactory<String, String> ephemeralProducerFactory(KafkaProperties kafkaProperties) {
-        Map<String, Object> props = new HashMap<>(kafkaProperties.buildProducerProperties(null));
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaProperties.getBootstrapServers());
+        if (kafkaProperties.getProducer().getProperties() != null) {
+            props.putAll(kafkaProperties.getProducer().getProperties());
+        }
+        // Override with ephemeral settings
         props.put(ProducerConfig.ACKS_CONFIG, "1");
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, false);
         props.put(ProducerConfig.RETRIES_CONFIG, 3);

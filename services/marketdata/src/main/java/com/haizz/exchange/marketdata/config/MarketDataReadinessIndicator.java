@@ -2,8 +2,8 @@ package com.haizz.exchange.marketdata.config;
 
 import com.haizz.exchange.marketdata.shared.StartupState;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.ReactiveHealthIndicator;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.ReactiveHealthIndicator;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 

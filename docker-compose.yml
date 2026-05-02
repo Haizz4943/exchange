@@ -61,7 +61,7 @@ services:
 
   # ── TimescaleDB (Market Data) ───────────────────────────────────
   postgres-timescale:
-    image: timescale/timescaledb:2.14-pg15
+    image: timescale/timescaledb:latest-pg15
     container_name: exchange-timescale
     ports:
       - "5433:5432"

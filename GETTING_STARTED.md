@@ -254,8 +254,8 @@ Nhấn **F5** hoặc vào tab **Run and Debug** (Ctrl+Shift+D) → chọn từng
 ---
 
 ## Bước 7 — Test API
-
-### Auth: Đăng ký tài khoản
+### Auth
+#### Đăng ký tài khoản
 
 ```bash
 curl -X POST http://localhost:8081/auth/register \
@@ -274,7 +274,7 @@ curl -X POST http://localhost:8081/auth/register \
 
 > Wallet Service sẽ tự động nhận event từ Kafka và tạo ví cho user này.
 
-### Auth: Đăng nhập — lấy token
+#### Đăng nhập — lấy token
 
 ```bash
 curl -X POST http://localhost:8081/auth/login \
@@ -294,14 +294,14 @@ curl -X POST http://localhost:8081/auth/login \
 
 Lưu `access_token` để dùng cho các request sau (thay `<TOKEN>` bên dưới).
 
-### Auth: Lấy thông tin user
+#### Lấy thông tin user
 
 ```bash
 curl http://localhost:8081/auth/me \
   -H "Authorization: Bearer <TOKEN>"
 ```
 
-### Auth: Refresh token
+#### Refresh token
 
 ```bash
 curl -X POST http://localhost:8081/auth/refresh \
@@ -309,7 +309,7 @@ curl -X POST http://localhost:8081/auth/refresh \
   -d "{\"refresh_token\": \"<refresh_token>\"}"
 ```
 
-### Auth: Logout
+#### Logout
 
 ```bash
 curl -X POST http://localhost:8081/auth/logout \
@@ -318,7 +318,7 @@ curl -X POST http://localhost:8081/auth/logout \
   -d "{\"refresh_token\": \"<refresh_token>\"}"
 ```
 
-### Auth: Validate token (internal — dành cho Gateway)
+#### Validate token (internal — dành cho Gateway)
 
 ```bash
 curl -X POST http://localhost:8081/internal/auth/validate-token \
@@ -328,7 +328,8 @@ curl -X POST http://localhost:8081/internal/auth/validate-token \
 
 ---
 
-### Wallet: Xem ví của tôi
+### Wallet
+#### Xem ví của tôi
 
 ```bash
 curl http://localhost:8082/api/v1/wallets/me \
@@ -345,7 +346,7 @@ curl http://localhost:8082/api/v1/wallets/me \
 }
 ```
 
-### Wallet: Nạp tiền (deposit)
+#### Nạp tiền (deposit)
 
 ```bash
 curl -X POST http://localhost:8082/api/v1/deposits \
@@ -354,14 +355,14 @@ curl -X POST http://localhost:8082/api/v1/deposits \
   -d "{\"assetCode\": \"USDT\", \"amount\": \"100.00\", \"clientRequestId\": \"dep-001\"}"
 ```
 
-### Wallet: Xem lịch sử nạp tiền
+#### Xem lịch sử nạp tiền
 
 ```bash
 curl "http://localhost:8082/api/v1/deposits?page=0&size=20" \
   -H "Authorization: Bearer <TOKEN>"
 ```
 
-### Wallet: Rút tiền (withdrawal)
+#### Rút tiền (withdrawal)
 
 ```bash
 curl -X POST http://localhost:8082/api/v1/withdrawals \
@@ -370,7 +371,7 @@ curl -X POST http://localhost:8082/api/v1/withdrawals \
   -d "{\"assetCode\": \"USDT\", \"amount\": \"50.00\", \"clientRequestId\": \"wd-001\"}"
 ```
 
-### Wallet: Xem lịch sử giao dịch
+#### Xem lịch sử giao dịch
 
 ```bash
 curl "http://localhost:8082/api/v1/wallet-transactions?page=0&size=50" \

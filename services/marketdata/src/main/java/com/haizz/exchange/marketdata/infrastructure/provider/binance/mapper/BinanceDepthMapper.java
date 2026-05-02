@@ -13,10 +13,10 @@ public final class BinanceDepthMapper {
 
     private BinanceDepthMapper() {}
 
-    public static DepthSnapshot toSnapshot(BinanceDepthEvent event) {
+    public static DepthSnapshot toSnapshot(BinanceDepthEvent event, String symbol) {
         List<List<BigDecimal>> bids = toLevels(event.bids(), true);
         List<List<BigDecimal>> asks = toLevels(event.asks(), false);
-        return new DepthSnapshot(PairSymbol.of(event.symbol()), bids, asks, Instant.now());
+        return new DepthSnapshot(PairSymbol.of(symbol), bids, asks, Instant.now());
     }
 
     private static List<List<BigDecimal>> toLevels(List<List<String>> rawLevels, boolean bids) {

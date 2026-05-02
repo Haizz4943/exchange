@@ -17,6 +17,7 @@ import reactor.core.publisher.Sinks;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -111,6 +112,14 @@ public class BinanceWebSocketClient {
                 .filter(msg -> msg.has("stream"))
                 .filter(msg -> streamNames.contains(msg.get("stream").asText()))
                 .map(msg -> msg.get("data"));
+    }
+
+    // Returns (streamName, data) pairs — needed when symbol must be extracted from the stream name (e.g. depth events have no "s" field in payload)
+    public Flux<Map.Entry<String, JsonNode>> combinedStreamWithName(Set<String> streamNames) {
+        return inbound.asFlux()
+                .filter(msg -> msg.has("stream"))
+                .filter(msg -> streamNames.contains(msg.get("stream").asText()))
+                .map(msg -> Map.entry(msg.get("stream").asText(), msg.get("data")));
     }
 
     private void setWsStatus(String status) {

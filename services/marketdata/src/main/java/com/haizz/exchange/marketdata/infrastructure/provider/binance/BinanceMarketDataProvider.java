@@ -61,14 +61,18 @@ public class BinanceMarketDataProvider implements MarketDataProvider {
         var streamNames = pairs.stream()
                 .map(p -> p.toLowerCaseStream("@depth20@100ms"))
                 .collect(Collectors.toSet());
-        return ws.combinedStream(streamNames)
-                .flatMap(node -> parseDepth(node));
+        return ws.combinedStreamWithName(streamNames)
+                .flatMap(entry -> {
+                    // depth payload has no "s" field — extract symbol from stream name e.g. "btcusdt@depth20@100ms"
+                    String symbol = entry.getKey().replace("@depth20@100ms", "").toUpperCase();
+                    return parseDepth(entry.getValue(), symbol);
+                });
     }
 
-    private Mono<DepthSnapshot> parseDepth(JsonNode node) {
+    private Mono<DepthSnapshot> parseDepth(JsonNode node, String symbol) {
         try {
             var event = objectMapper.treeToValue(node, BinanceDepthEvent.class);
-            return Mono.just(BinanceDepthMapper.toSnapshot(event));
+            return Mono.just(BinanceDepthMapper.toSnapshot(event, symbol));
         } catch (Exception e) {
             log.warn("Failed to parse depth event: {}", e.getMessage());
             return Mono.empty();

@@ -569,7 +569,7 @@ All endpoints implemented with Spring WebFlux (reactive).
 | `GET` | `/api/v1/marketdata/ticker/{pair}` | User JWT | FE | Current ticker |
 | `GET` | `/api/v1/marketdata/exchangeInfo` | None | FE | All pairs metadata (UI filters) |
 | `GET` | `/internal/ticker/{pair}` | Network-trust | Order Service | Compute freeze for market orders |
-| `GET` | `/internal/depth/{pair}?levels=20` | Network-trust | Matching Engine | Walk-the-book |
+| `GET` | `/internal/depth/{pair}?depth=20` | Network-trust | Matching Engine | Walk-the-book |
 | `GET` | `/internal/pairs/{pair}/metadata` | Network-trust | Order Service | Tick/step/minNotional |
 | `GET` | `/internal/market-data/health` | Network-trust | Matching Engine, Order Service | Per-pair feed health |
 
@@ -701,7 +701,7 @@ Returns full map of supported pairs:
 
 **`GET /internal/ticker/{pair}`:** Same shape as public ticker. No authentication. Used by Order Service for MARKET order freeze calculation.
 
-**`GET /internal/depth/{pair}?levels=20`:** Same as public orderbook. Used by Matching Engine for walk-the-book. Critical latency — must serve from Redis in < 5 ms p99.
+**`GET /internal/depth/{pair}?depth=20`:** Same as public orderbook. Used by Matching Engine for walk-the-book. Critical latency — must serve from Redis in < 5 ms p99.
 
 **`GET /internal/pairs/{pair}/metadata`:**
 ```json

@@ -3,7 +3,10 @@
     "allow": [
       "Bash(docker exec *)",
       "PowerShell(Get-Content \"D:\\\\Project\\\\exchange\\\\auth\\\\app-start.log\" | Where-Object { $_ -notmatch \"^\\\\s+at\\\\s\" } | Where-Object { $_ -match \"ERROR|Exception|Caused by|WARN\" } | Select-Object -Last 30)",
-      "PowerShell(curl -X POST http://localhost:8081/auth/register -H \"Content-Type: application/json\" -d '{\"email\": \"alice@example.com\", \"password\": \"Secret1234\"}')"
+      "PowerShell(curl -X POST http://localhost:8081/auth/register -H \"Content-Type: application/json\" -d '{\"email\": \"alice@example.com\", \"password\": \"Secret1234\"}')",
+      "Bash(./mvnw -q -o compile)",
+      "Bash(./mvnw compile *)",
+      "Bash(./mvnw -f services/marketdata/pom.xml compile)"
     ]
   }
 }

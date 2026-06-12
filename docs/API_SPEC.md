@@ -855,9 +855,14 @@ Auth: None
   "supports_group_request": false,
   "supported_resolutions": ["1", "5", "15", "60", "240", "1D"],
   "supports_marks": false,
-  "supports_timescale_marks": false
+  "supports_timescale_marks": false,
+  "supports_time": true,
+  "exchanges": [{ "value": "binance-sim", "name": "Binance (Sim)", "desc": "Simulated Binance market" }],
+  "symbols_types": [{ "name": "crypto", "value": "crypto" }]
 }
 ```
+
+**Resolution mapping** (TradingView resolution → internal interval): `"1"`→`1m`, `"5"`→`5m`, `"15"`→`15m`, `"60"`→`1h`, `"240"`→`4h`, `"1D"`→`1d`.
 
 ---
 
@@ -877,20 +882,24 @@ Auth: None
   "type": "crypto",
   "session": "24x7",
   "timezone": "Etc/UTC",
-  "exchange": "Binance (sim)",
+  "exchange": "binance-sim",
   "minmov": 1,
   "pricescale": 100,
   "has_intraday": true,
+  "has_no_volume": false,
+  "visible_plots_set": "ohlcv",
   "supported_resolutions": ["1", "5", "15", "60", "240", "1D"]
 }
 ```
+
+> `pricescale` is derived from the pair's `tick_size`: `pricescale = round(1 / tick_size)` (e.g. BTCUSDT tick_size=0.01 → 100).
 
 ---
 
 #### History (OHLCV Bars)
 
 ```
-GET /udf/history?symbol=BTCUSDT&resolution=1&from=1713600000&to=1713700000
+GET /udf/history?symbol=BTCUSDT&resolution=1&from=1713600000&to=1713700000&countback=300
 Auth: None
 ```
 
@@ -900,19 +909,22 @@ Auth: None
 | `resolution` | String | "1", "5", "15", "60", "240", "1D" |
 | `from` | long | Unix timestamp (seconds) |
 | `to` | long | Unix timestamp (seconds) |
+| `countback` | int | Optional. Number of bars before `to` to return. When present, `from` is treated as a hint and the server returns up to `countback` latest bars: `from_effective = max(from, to - countback * intervalSeconds)`. |
 
 **Response — 200 OK (data exists):**
 ```json
 {
   "s": "ok",
   "t": [1713600000, 1713600060, 1713600120],
-  "o": [60000.0, 60010.5, 60005.0],
-  "h": [60050.0, 60025.0, 60020.0],
-  "l": [59980.0, 60005.0, 59995.0],
-  "c": [60010.5, 60020.0, 60015.0],
-  "v": [12.5, 8.3, 15.2]
+  "o": ["60000.00", "60010.50", "60005.00"],
+  "h": ["60050.00", "60025.00", "60020.00"],
+  "l": ["59980.00", "60005.00", "59995.00"],
+  "c": ["60010.50", "60020.00", "60015.00"],
+  "v": ["12.5", "8.3", "15.2"]
 }
 ```
+
+> `o/h/l/c/v` are returned as **strings** (not numbers) to preserve decimal precision. TradingView accepts this in the compact format. `t` remains numeric (epoch seconds).
 
 **Response — 200 OK (no data):**
 ```json
@@ -1025,7 +1037,7 @@ Auth: None
 | Method | Path | Consumer | Notes |
 |--------|------|----------|-------|
 | `GET` | `/internal/ticker/{pair}` | Order Service | Same shape as public ticker |
-| `GET` | `/internal/depth/{pair}?levels=20` | Matching Engine | Same shape as public depth; must serve from Redis < 5ms p99 |
+| `GET` | `/internal/depth/{pair}?depth=20` | Matching Engine | Same shape as public depth; must serve from Redis < 5ms p99 |
 | `GET` | `/internal/pairs/{pair}/metadata` | Order Service | tickSize, stepSize, minNotional, status |
 | `GET` | `/internal/market-data/health` | Matching Engine, Order Service | Per-pair feed health |
 

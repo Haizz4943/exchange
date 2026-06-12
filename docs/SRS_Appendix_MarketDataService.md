@@ -327,7 +327,7 @@ MVP implementation: `BinanceMarketDataProvider`. Post-MVP: `SsiMarketDataProvide
 
 ```sql
 CREATE TABLE candlesticks (
-  pair       VARCHAR(20)   NOT NULL,
+  pair_symbol VARCHAR(20)   NOT NULL,
   interval   VARCHAR(5)    NOT NULL,    -- "1m", "5m", "15m", "1h", "4h", "1d"
   open_time  TIMESTAMPTZ   NOT NULL,
   open       NUMERIC(36, 18) NOT NULL,
@@ -337,13 +337,16 @@ CREATE TABLE candlesticks (
   volume     NUMERIC(36, 18) NOT NULL,
   quote_volume NUMERIC(36, 18) NOT NULL,
   trade_count INTEGER NOT NULL,
-  PRIMARY KEY (pair, interval, open_time)
+  PRIMARY KEY (pair_symbol, interval, open_time)
 );
 
 -- Convert to TimescaleDB hypertable, partitioned by open_time
 SELECT create_hypertable('candlesticks', 'open_time', chunk_time_interval => INTERVAL '7 days');
 
-CREATE INDEX ix_cs_pair_interval_time ON candlesticks (pair, interval, open_time DESC);
+CREATE INDEX ix_cs_pair_interval_time ON candlesticks (pair_symbol, interval, open_time DESC);
+
+-- Note: full DDL (with close_time, ingested_at, upsert semantics) is in
+-- SystemDesign_Appendix_MarketDataService.md §5.1 — that is the authoritative version.
 ```
 
 ### 4.2 Redis Keys
@@ -396,7 +399,7 @@ Binance WebSocket: no rate limit concern in inbound direction; outbound pings ev
 | SR-MD-EDGE-004 | TimescaleDB is down during backfill. | Retry with backoff; fail startup after 5 minutes. |
 | SR-MD-EDGE-005 | WebSocket delivers a message for a non-supported pair (misconfiguration). | Log WARN, drop the message. |
 | SR-MD-EDGE-006 | UDF `/udf/history` is called for a pair not in the system. | Return `{"s":"error","errmsg":"unknown_symbol"}` with HTTP 200 (per UDF protocol). |
-| SR-MD-EDGE-007 | UDF `/udf/history` for a range exceeding 10,000 bars (abuse prevention). | Cap to 10,000 bars, return the most recent within range, log INFO. |
+| SR-MD-EDGE-007 | UDF `/udf/history` for a range exceeding 1,000 bars (abuse prevention). | Reject with `400 RANGE_TOO_LARGE`. Clients must page within the 1,000-bar cap (TradingView does this via `countback`). |
 | SR-MD-EDGE-008 | Depth snapshot from Binance arrives with bids unsorted. | Sort bids descending, asks ascending, before caching. Log WARN if sort was needed. |
 
 ---

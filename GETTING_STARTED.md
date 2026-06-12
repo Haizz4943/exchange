@@ -3,9 +3,10 @@
 ## Yêu cầu
 
 | Tool           | Phiên bản |
-| -------------- | --------- |
+|----------------|-----------|
 | JDK            | 21        |
 | Maven          | 3.9.15    |
+| Node.js        | ≥ 18 (cho frontend) |
 | Docker Desktop | 29.2.1    |
 | IDE            | VS Code   |
 | DB Client      | DBeaver   |
@@ -35,12 +36,12 @@ docker compose up -d
 
 Lệnh này sẽ tải image và khởi động 4 container:
 
-| Container            | Image                        | Port | Dùng cho                          |
-| -------------------- | ---------------------------- | ---- | --------------------------------- |
-| `exchange-postgres`  | postgres:15-alpine           | 5432 | Auth, Wallet, Order, Match DB     |
-| `exchange-timescale` | timescale/timescaledb:2.14-pg15 | 5433 | Market Data DB (OHLCV time-series) |
-| `exchange-redis`     | redis:7-alpine               | 6379 | Cache (depth, ticker, exchange info) |
-| `exchange-kafka`     | apache/kafka:latest          | 9092 | Event bus                         |
+| Container            | Image                           | Port | Dùng cho                             |
+|----------------------|---------------------------------|------|--------------------------------------|
+| `exchange-postgres`  | postgres:15-alpine              | 5432 | Auth, Wallet, Order, Match DB        |
+| `exchange-timescale` | timescale/timescaledb:2.14-pg15 | 5433 | Market Data DB (OHLCV time-series)   |
+| `exchange-redis`     | redis:7-alpine                  | 6379 | Cache (depth, ticker, exchange info) |
+| `exchange-kafka`     | apache/kafka:latest             | 9092 | Event bus                            |
 
 ### Kiểm tra containers đã healthy chưa
 
@@ -201,7 +202,38 @@ curl http://localhost:8085/actuator/health/readiness
 
 ---
 
-## Bước 6 — Cấu hình VS Code (chạy cả hai service)
+## Bước 6 — Chạy Frontend (port 3000)
+
+Frontend là app Next.js (`services/frontend`, package `haizz-trading-panel`) — App Router + TypeScript + Tailwind (prefix `hx-`).
+
+### Cài đặt & chạy
+
+```ps
+cd D:\Project\exchange\services\frontend
+npm install          # chỉ lần đầu
+copy .env.example .env.local
+npm run dev
+```
+
+Mở http://localhost:3000
+
+### ⚠️ Lưu ý: cần API Gateway để chạy full
+
+Frontend được thiết kế gọi **một API Gateway duy nhất** qua `NEXT_PUBLIC_GATEWAY_URL` (mặc định `http://localhost:8080`). **Gateway chưa được build**, nên:
+
+- UI render bình thường, nhưng các call `/api/v1/auth`, `/api/v1/wallets`, `/udf/*` đều trỏ tới `:8080` → fail (các service thật nằm ở cổng khác nhau: 8081 / 8082 / 8085).
+- Để test **riêng chart** ngay bây giờ, trỏ tạm gateway sang Market Data Service trong `services/frontend/.env.local`:
+  ```
+  NEXT_PUBLIC_GATEWAY_URL=http://localhost:8085
+  ```
+  (chart `/udf/*` chạy đúng; auth/wallet sẽ hỏng vì khác cổng)
+- Giải pháp đúng là dựng **API Gateway** gom mọi service về `:8080` (đang pending).
+
+Trạng thái tính năng hiện tại: **Auth / Wallet / Chart** đã wired thật; **OrderBook / OrderForm / TradesTape** đang stub (chờ WS Gateway + Order/Matching service).
+
+---
+
+## Bước 7 — Cấu hình VS Code (chạy các Java service)
 
 Tạo hoặc cập nhật file `.vscode/launch.json` tại root project:
 
@@ -253,7 +285,7 @@ Nhấn **F5** hoặc vào tab **Run and Debug** (Ctrl+Shift+D) → chọn từng
 
 ---
 
-## Bước 7 — Test API
+## Bước 8 — Test API
 ### Auth
 #### Đăng ký tài khoản
 
@@ -480,7 +512,7 @@ curl "http://localhost:8085/internal/ticker/BTCUSDT"
 
 ```bash
 curl "http://localhost:8085/internal/depth/BTCUSDT"
-curl "http://localhost:8085/internal/depth/BTCUSDT?levels=50"
+curl "http://localhost:8085/internal/depth/BTCUSDT?depth=50"
 ```
 
 #### Pair metadata (tick size, step size, min notional)
@@ -608,7 +640,7 @@ curl "http://localhost:8085/udf/history?symbol=BTCUSDT&resolution=15&from=0&to=$
 
 ---
 
-## Bước 8 — Build & Package
+## Bước 9 — Build & Package
 
 ```bash
 # Build Auth Service
@@ -649,22 +681,22 @@ docker compose down -v
 
 ## Troubleshooting
 
-| Lỗi                                                       | Nguyên nhân                                       | Fix                                                                                                    |
-| --------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `Connection to localhost:5432 refused`                    | PostgreSQL chưa start hoặc chưa healthy           | `docker compose up -d && docker compose ps`                                                            |
-| `Connection to localhost:5433 refused`                    | TimescaleDB chưa start                            | `docker compose up -d postgres-timescale`                                                              |
-| `Could not find a valid Docker environment`               | Docker Desktop chưa mở                            | Mở Docker Desktop                                                                                      |
-| `auth_db / wallet_db does not exist`                      | Init script chưa chạy (volumes cũ)                | `docker compose down -v && docker compose up -d`                                                       |
-| Port 5432/5433/6379/9092 đã bị chiếm                    | App khác đang dùng port                           | Tắt app đó hoặc đổi port trong docker-compose.yml                                                      |
-| `PASSWORD_TOO_WEAK` khi register                          | Password thiếu chữ hoa hoặc số                    | Dùng VD: `Secret1234`                                                                                  |
-| `missing table [deposit_records]`                         | Migration V1 đã apply trước khi có bảng này       | Flyway V2 tự tạo lại khi restart. Hoặc: `docker compose down -v && docker compose up -d`              |
-| Wallet không tạo ví sau khi register                      | Kafka chưa healthy hoặc Wallet Service chưa up    | Chờ Kafka healthy rồi start lại Wallet Service                                                         |
-| `401 Unauthorized` khi gọi Wallet API                     | Token hết hạn hoặc sai                            | Đăng nhập lại lấy token mới                                                                            |
-| Market Data `/actuator/health/readiness` trả về `DOWN`   | Backfill chưa xong hoặc WS chưa connect           | Xem log, chờ thêm (backfill lần đầu mất 1–5 phút)                                                     |
-| `PairNotSupportedException` khi gọi ticker/depth          | Pair không có trong `market.pairs` config          | Chỉ dùng: `BTCUSDT`, `ETHUSDT`, `BNBUSDT`, `SOLUSDT`, `XRPUSDT`                                       |
-| UDF `/udf/history` trả `{"s":"no_data"}`                  | Range yêu cầu nằm ngoài dữ liệu đã backfill        | Dùng range trong 30 ngày gần nhất (1m) hoặc 365 ngày (1d)                                             |
-| `Circuit breaker OPEN` trong log Market Data             | Binance REST API bị lỗi liên tục                  | Chờ 30s để circuit breaker reset. Kiểm tra kết nối internet                                           |
-| Binance WS disconnect liên tục                            | Network không ổn định hoặc bị block               | Service tự reconnect với backoff 1s→2s→4s→...60s. Xem log để monitor                                  |
+| Lỗi                                                    | Nguyên nhân                                    | Fix                                                                                      |
+|--------------------------------------------------------|------------------------------------------------|------------------------------------------------------------------------------------------|
+| `Connection to localhost:5432 refused`                 | PostgreSQL chưa start hoặc chưa healthy        | `docker compose up -d && docker compose ps`                                              |
+| `Connection to localhost:5433 refused`                 | TimescaleDB chưa start                         | `docker compose up -d postgres-timescale`                                                |
+| `Could not find a valid Docker environment`            | Docker Desktop chưa mở                         | Mở Docker Desktop                                                                        |
+| `auth_db / wallet_db does not exist`                   | Init script chưa chạy (volumes cũ)             | `docker compose down -v && docker compose up -d`                                         |
+| Port 5432/5433/6379/9092 đã bị chiếm                   | App khác đang dùng port                        | Tắt app đó hoặc đổi port trong docker-compose.yml                                        |
+| `PASSWORD_TOO_WEAK` khi register                       | Password thiếu chữ hoa hoặc số                 | Dùng VD: `Secret1234`                                                                    |
+| `missing table [deposit_records]`                      | Migration V1 đã apply trước khi có bảng này    | Flyway V2 tự tạo lại khi restart. Hoặc: `docker compose down -v && docker compose up -d` |
+| Wallet không tạo ví sau khi register                   | Kafka chưa healthy hoặc Wallet Service chưa up | Chờ Kafka healthy rồi start lại Wallet Service                                           |
+| `401 Unauthorized` khi gọi Wallet API                  | Token hết hạn hoặc sai                         | Đăng nhập lại lấy token mới                                                              |
+| Market Data `/actuator/health/readiness` trả về `DOWN` | Backfill chưa xong hoặc WS chưa connect        | Xem log, chờ thêm (backfill lần đầu mất 1–5 phút)                                        |
+| `PairNotSupportedException` khi gọi ticker/depth       | Pair không có trong `market.pairs` config      | Chỉ dùng: `BTCUSDT`, `ETHUSDT`, `BNBUSDT`, `SOLUSDT`, `XRPUSDT`                          |
+| UDF `/udf/history` trả `{"s":"no_data"}`               | Range yêu cầu nằm ngoài dữ liệu đã backfill    | Dùng range trong 30 ngày gần nhất (1m) hoặc 365 ngày (1d)                                |
+| `Circuit breaker OPEN` trong log Market Data           | Binance REST API bị lỗi liên tục               | Chờ 30s để circuit breaker reset. Kiểm tra kết nối internet                              |
+| Binance WS disconnect liên tục                         | Network không ổn định hoặc bị block            | Service tự reconnect với backoff 1s→2s→4s→...60s. Xem log để monitor                     |
 
 ---
 
@@ -693,4 +725,9 @@ Market Data Service (port 8085)
     │                         →  publish  market-data.kline.v1    (ephemeral)
     └── Binance API           →  REST: exchange info, kline backfill
                               →  WebSocket: trade + depth20 + kline streams
+
+Frontend (port 3000)
+    └── API Gateway :8080     →  (CHƯA CÓ) gom REST + WS của mọi service
+                                  tạm thời trỏ NEXT_PUBLIC_GATEWAY_URL sang
+                                  service cụ thể (vd :8085) để test riêng chart
 ```

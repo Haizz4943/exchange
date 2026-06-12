@@ -30,7 +30,6 @@ public class BinanceWebSocketClient {
     private final ObjectMapper objectMapper;
     private final StartupState startupState;
     private final ReactiveStringRedisTemplate redis;
-    private final Set<String> allStreamNames;
 
     private final ReactorNettyWebSocketClient wsClient = new ReactorNettyWebSocketClient();
     private final Sinks.Many<JsonNode> inbound = Sinks.many().multicast().onBackpressureBuffer(65_536);
@@ -45,7 +44,6 @@ public class BinanceWebSocketClient {
         this.objectMapper = objectMapper;
         this.startupState = startupState;
         this.redis = redis;
-        this.allStreamNames = Set.of();
     }
 
     public void connect(Set<String> streamNames) {
@@ -70,9 +68,11 @@ public class BinanceWebSocketClient {
         };
 
         var disposable = wsClient.execute(URI.create(url), handler)
-                .doOnError(err -> scheduleReconnect(err, url, streamNames))
-                .doOnTerminate(() -> scheduleReconnect(null, url, streamNames))
-                .subscribe();
+                .subscribe(
+                        v -> {},
+                        err -> scheduleReconnect(err, url, streamNames),
+                        () -> scheduleReconnect(null, url, streamNames)
+                );
         connection.set(disposable);
     }
 

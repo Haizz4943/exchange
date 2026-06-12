@@ -1,6 +1,7 @@
 package com.haizz.exchange.marketdata.infrastructure.provider.binance;
 
 import com.haizz.exchange.marketdata.config.BinanceProperties;
+import com.haizz.exchange.marketdata.infrastructure.provider.binance.dto.BinanceDepthEvent;
 import com.haizz.exchange.marketdata.infrastructure.provider.binance.dto.BinanceExchangeInfo;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -67,6 +68,20 @@ public class BinanceRestClient {
                 .transformDeferred(RateLimiterOperator.of(rateLimiter))
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)).filter(this::isRetryable));
+    }
+
+    public Mono<BinanceDepthEvent> getDepth(String symbol, int limit) {
+        return webClient.get()
+                .uri(b -> b.path("/api/v3/depth")
+                        .queryParam("symbol", symbol)
+                        .queryParam("limit", limit)
+                        .build())
+                .retrieve()
+                .bodyToMono(BinanceDepthEvent.class)
+                .transformDeferred(RateLimiterOperator.of(rateLimiter))
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
+                .retryWhen(Retry.backoff(3, Duration.ofSeconds(1)).filter(this::isRetryable))
+                .doOnError(e -> log.error("Failed to fetch depth for {}: {}", symbol, e.getMessage()));
     }
 
     private boolean isRetryable(Throwable t) {

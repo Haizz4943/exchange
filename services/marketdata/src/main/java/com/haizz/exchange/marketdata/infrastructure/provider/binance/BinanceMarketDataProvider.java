@@ -111,8 +111,9 @@ public class BinanceMarketDataProvider implements MarketDataProvider {
 
     @Override
     public Mono<DepthSnapshot> fetchDepth(PairSymbol pair, int levels) {
-        return rest.getExchangeInfo()
-                .flatMap(info -> Mono.empty()); // simplified: use WS data; REST depth needs separate endpoint
+        String symbol = pair.value().toUpperCase();
+        return rest.getDepth(symbol, levels)
+                .map(event -> BinanceDepthMapper.toSnapshot(event, symbol));
     }
 
     @Override

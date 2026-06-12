@@ -37,8 +37,8 @@ public class InternalController {
     @GetMapping("/depth/{pair}")
     public Mono<DepthResponse> depth(
             @PathVariable String pair,
-            @RequestParam(defaultValue = "20") int levels) {
-        return getDepthUseCase.execute(pair, Math.min(levels, Constants.MAX_DEPTH_LEVELS))
+            @RequestParam(name = "depth", defaultValue = "20") int depth) {
+        return getDepthUseCase.execute(pair, Math.min(depth, Constants.MAX_DEPTH_LEVELS))
                 .map(DepthResponse::from);
     }
 

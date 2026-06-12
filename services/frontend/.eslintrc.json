@@ -1,0 +1,19 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "plugins": ["import", "@typescript-eslint"],
+  "rules": {
+    "@typescript-eslint/no-explicit-any": "off",
+    "import/no-restricted-paths": [
+      "error",
+      {
+        "zones": [
+          { "target": "./src/features", "from": "./src/app" },
+          { "target": "./src/features", "from": "./src/panel" },
+          { "target": "./src/lib", "from": "./src/features" },
+          { "target": "./src/lib", "from": "./src/panel" },
+          { "target": "./src/components", "from": "./src/features" }
+        ]
+      }
+    ]
+  }
+}

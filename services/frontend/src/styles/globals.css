@@ -1,0 +1,17 @@
+/* Standalone-only global styles */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  background: #0f0f0f;
+  color: #e5e5e5;
+}
+
+* {
+  box-sizing: border-box;
+}

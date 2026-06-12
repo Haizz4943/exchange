@@ -1,0 +1,56 @@
+/* Scoped styles for the haizz-panel root — safe to ship in npm */
+@tailwind components;
+@tailwind utilities;
+
+.haizz-panel {
+  font-family: Inter, system-ui, sans-serif;
+  color: var(--hx-text);
+  background: var(--hx-bg);
+
+  /* Default (light) theme variables */
+  --hx-bg: #ffffff;
+  --hx-surface: #f5f5f5;
+  --hx-border: #e0e0e0;
+  --hx-text: #111111;
+  --hx-text-muted: #666666;
+  --hx-primary: #2962ff;
+  --hx-primary-hover: #1e4ecf;
+  --hx-success: #26a69a;
+  --hx-danger: #ef5350;
+  --hx-warning: #ffa726;
+}
+
+.haizz-panel[data-theme="dark"] {
+  --hx-bg: #1a1a1a;
+  --hx-surface: #2a2a2a;
+  --hx-border: #3a3a3a;
+  --hx-text: #e5e5e5;
+  --hx-text-muted: #999999;
+  --hx-primary: #4d7cff;
+  --hx-primary-hover: #3a5fd4;
+  --hx-success: #26a69a;
+  --hx-danger: #ef5350;
+  --hx-warning: #ffa726;
+}
+
+.haizz-panel[data-theme="inherit"] {
+  /* Delegate to host CSS variables */
+  --hx-bg: var(--theme-bg, #ffffff);
+  --hx-surface: var(--theme-surface, #f5f5f5);
+  --hx-border: var(--theme-border, #e0e0e0);
+  --hx-text: var(--theme-text, #111111);
+  --hx-text-muted: var(--theme-text-muted, #666666);
+  --hx-primary: var(--theme-primary, #2962ff);
+  --hx-primary-hover: var(--theme-primary-hover, #1e4ecf);
+  --hx-success: var(--theme-success, #26a69a);
+  --hx-danger: var(--theme-danger, #ef5350);
+}
+
+/* Balance pulse animation for real-time wallet updates */
+@keyframes hx-balance-pulse {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: var(--hx-success); opacity: 0.2; }
+}
+.haizz-panel .hx-balance-pulse {
+  animation: hx-balance-pulse 0.6s ease-in-out;
+}

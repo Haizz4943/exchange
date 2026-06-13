@@ -222,53 +222,62 @@ Returns 404 (not 403, to avoid revealing internal paths exist). Defense-in-depth
 
 ## 4. JWT Validation & Header Injection
 
-### 4.1 Public Key Loading
+> **⚠️ IMPLEMENTATION NOTE (back-ported from gateway build, 2026-06):** This section
+> originally specified RS256 with a loaded public key. The **actual** Auth Service
+> (`JwtTokenProvider.java`) signs with **HS256 + a shared secret** in dev, and in
+> RS256 mode it generates an **ephemeral in-memory key per startup with no published
+> JWKS** — so local RS256 verification at the Gateway is impossible in dev. The Gateway
+> therefore verifies **HS256 with the same shared secret** (`JWT_SECRET`) and issuer
+> `haizz-auth`. RS256 + a real key-distribution mechanism (file/JWKS) is deferred to
+> prod hardening; when added, the Gateway selects the algorithm via `gateway.jwt.algorithm`
+> to mirror Auth.
 
-At startup, Gateway loads Auth Service's RS256 public key:
+### 4.1 Signing Key Loading
+
+The Gateway shares Auth's signing configuration:
+
+- **Dev (default): HS256.** Symmetric secret from `JWT_SECRET` (same value Auth uses).
+  No network call to Auth — eliminates startup ordering dependency.
+- **Prod (deferred): RS256.** Public key from `JWT_PUBLIC_KEY` (PEM) or a JWKS endpoint.
+  Requires Auth to persist its key pair and publish the public key first
+  (`GET /internal/auth/public-key`), which the MVP Auth Service does **not** yet do.
 
 ```java
 @Component
-public class PublicKeyLoader {
-    private RSAPublicKey publicKey;
+public class JwtKeyProvider {
+    @Value("${gateway.jwt.algorithm:HS256}") private String algorithm;
+    @Value("${gateway.jwt.secret:}")         private String secret;       // HS256
+    @Value("${gateway.jwt.public-key:}")     private String publicKeyPem; // RS256 (prod)
 
     @PostConstruct
-    public void loadKey() {
-        // Option A: from file (configured path)
-        // Option B: from Auth Service endpoint
-        var keyStr = readFromConfig();
-        this.publicKey = parseRSAPublicKey(keyStr);
+    public void init() {
+        // HS256 → MACVerifier(secret); RS256 → RSASSAVerifier(parsePem(publicKeyPem))
     }
-
-    // Scheduled refresh every 1h (in case Auth rotates keys — not in MVP but good habit)
-    @Scheduled(fixedDelay = 3600_000, initialDelay = 3600_000)
-    public void refresh() { /* re-fetch and replace */ }
 }
 ```
-
-**MVP decision:** Load from environment variable `JWT_PUBLIC_KEY` (PEM format). No network call to Auth at startup (eliminates startup ordering dependency).
 
 ### 4.2 JWT Verification
 
 ```java
 @Component
 public class JwtVerifier {
-    private final PublicKeyLoader keyLoader;
+    private final JwtKeyProvider keyProvider;   // HS256 MACVerifier (dev) / RS256 (prod)
 
     public JwtClaims verify(String token) {
         try {
             var jwt = SignedJWT.parse(token);
-            var verifier = new RSASSAVerifier(keyLoader.getPublicKey());
-            if (!jwt.verify(verifier)) throw new JwtException("Invalid signature");
+            if (!jwt.verify(keyProvider.verifier())) throw new JwtException("Invalid signature");
 
             var claims = jwt.getJWTClaimsSet();
             if (claims.getExpirationTime().before(new Date())) throw new JwtException("Token expired");
             if (!"haizz-auth".equals(claims.getIssuer())) throw new JwtException("Invalid issuer");
 
+            // Actual Auth claims: sub, email, scope(="user"), jti. There is NO `roles` claim.
             return new JwtClaims(
                 claims.getSubject(),                    // user_id
                 claims.getStringClaim("email"),
-                claims.getStringClaim("scope"),
-                claims.getJWTID()                       // jti for potential blacklist check
+                claims.getStringClaim("scope"),         // used as X-User-Roles downstream
+                claims.getStringClaim("jti")            // jti for potential blacklist check
             );
         } catch (ParseException | JOSEException e) {
             throw new JwtException("Malformed token");
@@ -299,10 +308,13 @@ public class JwtAuthenticationFilter implements GatewayFilter, Ordered {
         try {
             var claims = jwtVerifier.verify(authHeader.substring(7));
 
-            // Inject downstream headers
+            // Inject downstream headers.
+            // X-User-Roles carries the `scope` claim (Auth has no `roles` claim) — matches
+            // API_SPEC §6. X-User-Email/X-User-Scope kept for services that read them.
             var mutated = exchange.getRequest().mutate()
                 .header("X-User-Id", claims.userId())
                 .header("X-User-Email", claims.email())
+                .header("X-User-Roles", claims.scope())
                 .header("X-User-Scope", claims.scope())
                 .build();
 
@@ -656,13 +668,21 @@ Client receives close code `4401` → triggers refresh + reconnect (see Frontend
 
 ### 7.1 Consumed Topics
 
-| Topic | Consumer Group | Purpose |
-|-------|----------------|---------|
-| `market-data.depth.v1` | `ws-fanout` | Push depth to `market:<pair>:depth` subscribers |
-| `market-data.kline.v1` | `ws-fanout` | Push klines to `market:<pair>:kline:<interval>` subscribers |
-| `market-data.events.v1` | `ws-fanout` | Push ticker + external trades to `market:<pair>:ticker` subscribers |
-| `matching.events.v1` | `ws-fanout` | Push order state updates to `orders` subscribers (filtered by userId) |
-| `wallet.events.v1` | `ws-fanout` | Push wallet changes to `wallet` subscribers (filtered by userId) |
+> **⚠️ IMPLEMENTATION NOTE (back-ported from gateway build, 2026-06):** Kafka messages
+> are **NOT uniformly enveloped** on the wire. `market-data.depth.v1` and
+> `market-data.kline.v1` carry the **raw event** (no `EventEnvelope`);
+> `market-data.events.v1` carries a wrapped `EventEnvelope{eventType, payload}`; and the
+> wallet stream is published to **`wallet.transactions.v1`** (NOT `wallet.events.v1`) as a
+> **raw payload map containing only deltas**. The router therefore parses **per topic**,
+> not via a single common envelope (see §7.2).
+
+| Topic | Consumer Group | On-wire shape | Purpose |
+|-------|----------------|---------------|---------|
+| `market-data.depth.v1` | `ws-fanout` | raw `DepthUpdatedEvent` | Push depth to `market:<pair>:depth` subscribers |
+| `market-data.kline.v1` | `ws-fanout` | raw `KlineUpdatedEvent` | Push klines to `market:<pair>:kline:<resolution>` subscribers |
+| `market-data.events.v1` | `ws-fanout` | `EventEnvelope` | Push external trades to `market:<pair>:trades` subscribers |
+| `wallet.transactions.v1` | `ws-fanout` | raw map (deltas) | Push wallet changes to `wallet` subscribers (filtered by userId) |
+| `matching.events.v1` *(deferred — service not built)* | `ws-fanout` | `EventEnvelope` | Push order state updates to `orders` subscribers (filtered by userId) |
 
 ### 7.2 Message Router
 
@@ -691,29 +711,59 @@ public class WsMessageRouter {
         }
     }
 
-    private Routing resolveRouting(EventEnvelope envelope) {
-        return switch (envelope.schema()) {
-            // Market data — broadcast to all pair subscribers
-            case "market-data.depth.v1.DepthUpdated" ->
-                new Routing("market:" + envelope.payload("pair") + ":depth", null);
-            case "market-data.kline.v1.KlineUpdated" ->
-                new Routing("market:" + envelope.payload("pair") + ":kline:" + envelope.payload("interval"), null);
-            case "market-data.events.v1.ExternalTradeObserved" ->
-                new Routing("market:" + envelope.payload("pair") + ":ticker", null);
+    // Routing is resolved per source TOPIC (not a uniform envelope). Each branch parses
+    // the topic-specific JSON, builds the FE-facing `schema` string (the FE dispatch key —
+    // see §7.3), the target channel, the user filter, and the (possibly transformed) payload.
+    private Routing resolveRouting(String topic, JsonNode raw) {
+        return switch (topic) {
+            // --- raw events, broadcast to all pair subscribers ---
+            case "market-data.depth.v1" -> new Routing(
+                "market:" + raw.get("pair").asText() + ":depth",
+                "market-data.depth.v1", null, raw);           // FE drops any suffix here
 
-            // User-scoped — only to the owning user
-            case String s when s.startsWith("matching.events.v1.") ->
-                new Routing("orders", envelope.payload("userId"));
-            case String s when s.startsWith("wallet.events.v1.") ->
-                new Routing("wallet", envelope.payload("userId"));
+            case "market-data.kline.v1" -> new Routing(
+                "market:" + raw.get("pair").asText() + ":kline:" + raw.get("interval").asText(),
+                "market-data.kline.v1", null,
+                klinePayload(raw));                            // openTime(Instant) → time(epoch s)
 
-            default -> null;    // unknown schema — skip
+            // --- wrapped EventEnvelope ---
+            case "market-data.events.v1" -> {
+                var p = raw.get("payload");
+                yield new Routing(
+                    "market:" + p.get("pair").asText() + ":trades",   // FE tape uses :trades
+                    "market-data.events.v1.ExternalTradeObserved",    // note: no "Event" suffix
+                    null, tradePayload(p));                           // eventTime→executedAt, +side
+            }
+
+            // --- user-scoped: raw map from wallet.transactions.v1 ---
+            case "wallet.transactions.v1" -> new Routing(
+                "wallet",
+                "wallet.events.v1.WalletTransactionRecorded",
+                raw.get("userId").asText(), raw);             // forwarded as-is; deltas only (see note)
+
+            // --- deferred until Matching Engine exists ---
+            case "matching.events.v1" -> {
+                var p = raw.get("payload");
+                yield new Routing("orders",
+                    "matching.events.v1." + raw.get("eventType").asText(),
+                    p.get("userId").asText(), p);
+            }
+
+            default -> null;    // unknown topic — skip
         };
     }
 
-    record Routing(String channel, String userId) {}
+    record Routing(String channel, String schema, String userId, Object payload) {}
 }
 ```
+
+> **⚠️ wallet live-balance limitation (back-ported):** `wallet.transactions.v1` carries only
+> **deltas** (`deltaAvailable`, `deltaFrozen`, `deltaTotal`), but the FE wallet store
+> (`applyBalanceChange`) expects **absolute** `available` / `frozen` / `balanceAfter`. A
+> stateless Gateway cannot derive absolutes, so the event is forwarded as-is and the FE
+> balance does not fully update from the stream alone. **Recommended back-port:** have the
+> Wallet Service include post-transaction absolute balances in the event payload, OR have
+> the FE refetch `/wallets/me` on receiving a wallet event.
 
 ### 7.3 Outbound Message Shape
 
@@ -722,14 +772,28 @@ Messages pushed to client:
 ```json
 {
   "channel": "market:BTCUSDT:depth",
-  "schema": "market-data.depth.v1.DepthUpdated",
-  "payload": { ... },
-  "correlation_id": "uuid-or-null",
+  "schema": "market-data.depth.v1",
+  "payload": { "pair": "BTCUSDT", "bids": [...], "asks": [...] },
   "timestamp": "2026-04-22T10:30:15.123Z"
 }
 ```
 
-The FE `WsClient.onMessage(schema, handler)` dispatches by `schema`. The `channel` field is informational (helps debugging).
+The FE `WsClient` (`handleMessage`) dispatches **solely by the `schema` field** and passes
+`payload` to the registered handler; `channel` is informational (debugging only). The
+**exact** schema strings the FE listens for (verified against `WsStoreSyncer.tsx` /
+`CandlestickChart.tsx`) are:
+
+| `schema` | FE consumer | `payload` the FE store expects |
+|----------|-------------|--------------------------------|
+| `market-data.depth.v1` | OrderBook | `{ pair, bids:[[p,q]], asks:[[p,q]] }` |
+| `market-data.kline.v1` | Chart | `{ pair, interval, time(epoch s), open, high, low, close }` |
+| `market-data.events.v1.ExternalTradeObserved` | TradesTape | `{ pair, price, quantity, executedAt }` |
+| `wallet.events.v1.WalletTransactionRecorded` | Wallet balance | `{ assetCode, available?, frozen?, balanceAfter? }` |
+| `matching.events.v1.OrderPartiallyFilled` / `.OrderFilled` / `.OrderCancelled` | Orders *(deferred)* | `FillUpdate` |
+
+Because the schema string is the contract (not the topic name), the router builds it
+explicitly per §7.2 — e.g. the depth schema is `market-data.depth.v1` (no `.DepthUpdated`
+suffix), and the trade schema is `...ExternalTradeObserved` (no `Event` suffix).
 
 ### 7.4 Consumer Configuration
 

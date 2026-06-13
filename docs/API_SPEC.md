@@ -1107,8 +1107,12 @@ Auth: None
 
 **Headers injected by Gateway on authenticated requests:**
 - `X-User-Id: <uuid>` — extracted from JWT `sub` claim
-- `X-User-Roles: user` — from JWT `roles` claim
+- `X-User-Roles: user` — from JWT `scope` claim (Auth emits `scope`, not `roles`; back-ported 2026-06). `X-User-Email` and `X-User-Scope` are also injected.
 - `X-Correlation-Id: <uuid>` — generated if absent
+
+> **⚠️ NOTE (back-ported, 2026-06):** The Gateway validates JWTs with **HS256 + shared secret**
+> in dev (Auth's RS256 mode uses an ephemeral, unpublished key). See
+> `SystemDesign_Appendix_APIGateway.md` §4.
 
 ---
 
@@ -1135,12 +1139,18 @@ Headers: Authorization: Bearer <JWT_ACCESS_TOKEN>
 
 ### 7.2 Client → Server Messages
 
+> **⚠️ NOTE (back-ported from gateway/FE build, 2026-06):** The channel taxonomy below was
+> updated to match the **implemented** frontend (`WsClient.ts`, `OrderBook.tsx`,
+> `TradesTape.tsx`, `CandlestickChart.tsx`). Channels are colon-delimited
+> `market:<pair>:<stream>`, plus bare `wallet` and `orders`. (The earlier
+> `depth.BTCUSDT` / `order.updates` dot-form was never implemented.)
+
 #### Subscribe
 
 ```json
 {
   "op": "subscribe",
-  "channels": ["kline.BTCUSDT.1m", "depth.BTCUSDT", "order.updates", "wallet.updates"]
+  "channels": ["market:BTCUSDT:kline:1m", "market:BTCUSDT:depth", "market:BTCUSDT:trades", "wallet", "orders"]
 }
 ```
 
@@ -1149,13 +1159,24 @@ Headers: Authorization: Bearer <JWT_ACCESS_TOKEN>
 ```json
 {
   "op": "unsubscribe",
-  "channels": ["depth.BTCUSDT"]
+  "channels": ["market:BTCUSDT:depth"]
 }
 ```
 
 ---
 
 ### 7.3 Server → Client Messages
+
+> **⚠️ NOTE (back-ported, 2026-06):** Every server→client message is wrapped in a uniform
+> envelope and the FE dispatches **by the `schema` field** (not a `type` field):
+>
+> ```json
+> { "channel": "market:BTCUSDT:depth", "schema": "market-data.depth.v1", "payload": { ... }, "timestamp": "..." }
+> ```
+>
+> The `payload` shapes below describe the **contents of `payload`**. The exact `schema`
+> values are listed in §7.4. (The flat `{"type": "..."}` form shown historically is not
+> what the FE consumes.)
 
 #### Kline Update
 
@@ -1269,14 +1290,14 @@ Implicitly scoped to the authenticated user. No userId in payload.
 
 ### 7.4 Channel Reference
 
-| Channel | Direction | Auth Scope | Data Source |
+| Channel (subscribe) | `schema` (dispatch key) | Auth Scope | Data Source (Kafka topic) |
 |---------|-----------|------------|------------|
-| `kline.<pair>.<resolution>` | Server → Client | Public | Kafka `market-data.kline.v1` |
-| `depth.<pair>` | Server → Client | Public | Kafka `market-data.depth.v1` |
-| `trade.<pair>` | Server → Client | Public | Kafka `market-data.events.v1` |
-| `order.updates` | Server → Client | User-scoped | Kafka `matching.events.v1` (filtered by userId) |
-| `wallet.updates` | Server → Client | User-scoped | Kafka `wallet.events.v1` (filtered by userId) |
-| `feed.status` | Server → Client | Public | Kafka `market-data.events.v1` |
+| `market:<pair>:kline:<resolution>` | `market-data.kline.v1` | Public | `market-data.kline.v1` (raw event) |
+| `market:<pair>:depth` | `market-data.depth.v1` | Public | `market-data.depth.v1` (raw event) |
+| `market:<pair>:trades` | `market-data.events.v1.ExternalTradeObserved` | Public | `market-data.events.v1` (EventEnvelope) |
+| `market:<pair>:ticker` | *(reserved — FE subscribes but has no handler yet)* | Public | — |
+| `orders` | `matching.events.v1.OrderPartiallyFilled` / `.OrderFilled` / `.OrderCancelled` | User-scoped | `matching.events.v1` *(deferred)* |
+| `wallet` | `wallet.events.v1.WalletTransactionRecorded` | User-scoped | **`wallet.transactions.v1`** (filtered by userId) |
 
 ---
 
@@ -1474,9 +1495,16 @@ Ephemeral — consumed by Gateway for WS fan-out. Same shape as WS kline message
 
 ---
 
-#### `wallet.events.v1` (partition key: `userId`)
+#### `wallet.transactions.v1` (partition key: `walletId`)
 
-**WalletTransactionRecorded:**
+> **⚠️ NOTE (back-ported, 2026-06):** The implemented Wallet Service publishes to topic
+> **`wallet.transactions.v1`** (not `wallet.events.v1`), keyed by **`walletId`**, with a
+> **raw payload (no EventEnvelope)** that carries **deltas** rather than absolute balances.
+> The Gateway fan-out consumes this topic and re-labels it to the FE schema
+> `wallet.events.v1.WalletTransactionRecorded`. See the gateway live-balance limitation in
+> `SystemDesign_Appendix_APIGateway.md` §7.2.
+
+**WalletTransaction (actual on-wire payload):**
 ```json
 {
   "txnId": "t1-...",
@@ -1484,13 +1512,18 @@ Ephemeral — consumed by Gateway for WS fan-out. Same shape as WS kline message
   "userId": "7d3e...",
   "assetCode": "USDT",
   "type": "TRADE_DEBIT",
-  "amount": "-5500.000000",
-  "balanceAfter": "4500.000000",
+  "deltaAvailable": "-5500.000000",
+  "deltaFrozen": "0.000000",
+  "deltaTotal": "-5500.000000",
+  "referenceType": "TRADE",
   "referenceId": "trade-uuid-...",
   "createdAt": "2026-04-25T10:15:00.200Z"
 }
 ```
-Producer: Wallet Service → Consumer: Gateway (WS fan-out to user)
+Producer: Wallet Service → Consumer: Gateway (WS fan-out to user).
+**Gap:** the FE wallet store expects absolute `available`/`frozen`/`balanceAfter`; this
+delta-only payload cannot drive a full balance update from the stream alone (back-port options
+above).
 
 ---
 

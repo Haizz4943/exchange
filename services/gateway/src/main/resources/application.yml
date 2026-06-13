@@ -1,0 +1,100 @@
+spring:
+  application:
+    name: gateway
+
+  # Spring Cloud Gateway settings
+  cloud:
+    gateway:
+      httpclient:
+        response-timeout: 10s
+        connect-timeout: 2000
+      default-filters:
+        - name: DedupeResponseHeader
+          args:
+            name: Access-Control-Allow-Origin
+            strategy: RETAIN_UNIQUE
+
+  # Max in-memory buffer for proxied requests
+  codec:
+    max-in-memory-size: 256KB
+
+  # Redis (reactive — for rate limiting)
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+  # Kafka (fan-out consumer)
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ws-fanout
+      auto-offset-reset: latest
+      enable-auto-commit: true
+      max-poll-records: 200
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      concurrency: 3
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+# Gateway-specific properties
+gateway:
+  jwt:
+    algorithm: ${JWT_ALGORITHM:HS256}
+    secret: ${JWT_SECRET:change-me-in-prod-must-be-at-least-32-chars!}
+    public-key: ${JWT_PUBLIC_KEY:}
+    issuer: ${JWT_ISSUER:haizz-auth}
+  rate-limit:
+    user:
+      capacity: 120
+      refill-rate: 60.0
+    ip:
+      capacity: 240
+      refill-rate: 120.0
+  ws:
+    max-connections-per-user: 5
+    max-subscriptions-per-connection: 20
+    token-expiry-check-interval-ms: 30000
+  routes:
+    auth-uri: ${AUTH_URI:http://localhost:8081}
+    wallet-uri: ${WALLET_URI:http://localhost:8082}
+    order-uri: ${ORDER_URI:http://localhost:8083}
+    trade-uri: ${TRADE_URI:http://localhost:8084}
+    marketdata-uri: ${MARKETDATA_URI:http://localhost:8085}
+
+# CORS: configurable via env
+cors:
+  allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:3001}
+
+logging:
+  level:
+    root: INFO
+    com.haizz.exchange.gateway: DEBUG
+    org.springframework.cloud.gateway: INFO
+    reactor.netty: WARN
+    org.springframework.kafka: WARN

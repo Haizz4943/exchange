@@ -1,0 +1,24 @@
+# Dev profile — overrides for running services locally (not in Docker)
+# Matches convention from auth/wallet services: localhost defaults for all infra
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+gateway:
+  routes:
+    auth-uri: http://localhost:8081
+    wallet-uri: http://localhost:8082
+    order-uri: http://localhost:8083
+    trade-uri: http://localhost:8084
+    marketdata-uri: http://localhost:8085
+
+logging:
+  level:
+    com.haizz.exchange.gateway: DEBUG
+    reactor.netty.http.client: DEBUG

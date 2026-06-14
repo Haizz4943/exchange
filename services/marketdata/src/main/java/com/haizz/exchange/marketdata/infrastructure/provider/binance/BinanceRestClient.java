@@ -3,6 +3,7 @@ package com.haizz.exchange.marketdata.infrastructure.provider.binance;
 import com.haizz.exchange.marketdata.config.BinanceProperties;
 import com.haizz.exchange.marketdata.infrastructure.provider.binance.dto.BinanceDepthEvent;
 import com.haizz.exchange.marketdata.infrastructure.provider.binance.dto.BinanceExchangeInfo;
+import com.haizz.exchange.marketdata.shared.SupportedPairs;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.ratelimiter.RateLimiter;
@@ -28,21 +29,32 @@ public class BinanceRestClient {
     private final WebClient webClient;
     private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
+    private final SupportedPairs supportedPairs;
 
     public BinanceRestClient(BinanceProperties props,
                              RateLimiterRegistry rateLimiterRegistry,
-                             CircuitBreakerRegistry circuitBreakerRegistry) {
+                             CircuitBreakerRegistry circuitBreakerRegistry,
+                             SupportedPairs supportedPairs) {
         this.webClient = WebClient.builder()
                 .baseUrl(props.getRest().getBaseUrl())
                 .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
                 .build();
         this.rateLimiter = rateLimiterRegistry.rateLimiter(RATE_LIMITER_NAME);
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(CIRCUIT_BREAKER_NAME);
+        this.supportedPairs = supportedPairs;
     }
 
     public Mono<BinanceExchangeInfo> getExchangeInfo() {
+        // Request only the supported symbols. The full unfiltered exchangeInfo response is
+        // ~17MB (and growing as Binance adds pairs), which overflows the in-memory buffer;
+        // we discard everything except the configured pairs anyway, so fetch just those.
+        String symbolsParam = supportedPairs.getPairValues().stream()
+                .map(s -> "\"" + s + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
         return webClient.get()
-                .uri("/api/v3/exchangeInfo")
+                .uri(b -> b.path("/api/v3/exchangeInfo")
+                        .queryParam("symbols", symbolsParam)
+                        .build())
                 .retrieve()
                 .bodyToMono(BinanceExchangeInfo.class)
                 .transformDeferred(RateLimiterOperator.of(rateLimiter))

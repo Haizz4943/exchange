@@ -46,11 +46,13 @@ public class RouteConfig {
                 // Auth — all paths: no JWT (auth service handles its own security)
                 // Note: auth service's /me and /logout are authenticated, but auth handles that internally;
                 // we don't double-verify here to avoid circular dependency.
+                // Auth exposes /auth/** (not /api/v1/auth/**), so strip the public prefix before forwarding.
                 .route("auth", r -> r
                         .path("/api/v1/auth/**")
                         .filters(f -> f
                                 .filter(correlationIdFilter)
-                                .filter(rateLimitFilter))
+                                .filter(rateLimitFilter)
+                                .rewritePath("/api/v1/auth/(?<segment>.*)", "/auth/${segment}"))
                         .uri(authUri))
 
                 // Wallet service — JWT required

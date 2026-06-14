@@ -11,6 +11,12 @@ spring:
     bootstrap-servers: localhost:9092
 
 gateway:
+  # Must match the HS256 secret that auth/wallet sign & verify with in dev
+  # (their application-dev.yml uses this same value). Otherwise the gateway
+  # rejects valid tokens with 401.
+  jwt:
+    algorithm: HS256
+    secret: dev-secret-key-do-not-use-in-production-32x
   routes:
     auth-uri: http://localhost:8081
     wallet-uri: http://localhost:8082

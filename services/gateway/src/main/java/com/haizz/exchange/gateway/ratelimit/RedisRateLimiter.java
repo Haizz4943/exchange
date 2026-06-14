@@ -21,7 +21,9 @@ import java.util.List;
  * Returns 1 if allowed, 0 if denied.
  */
 @Slf4j
-@Component
+// Explicit bean name avoids collision with Spring Cloud Gateway's auto-configured
+// "redisRateLimiter" bean (GatewayRedisAutoConfiguration) since the 2025.1 train.
+@Component("haizzRedisRateLimiter")
 @RequiredArgsConstructor
 public class RedisRateLimiter {
 

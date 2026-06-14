@@ -129,17 +129,71 @@ filter already handles authentication cleanly.
 
 ---
 
-## 8. Spring Cloud Version: 2025.0.1
+## 8. Spring Cloud Version: 2025.1.1 (corrected from 2025.0.1)
 
-**Decision:** `spring-cloud-dependencies` version `2025.0.1` with artifact
+**Decision:** `spring-cloud-dependencies` version `2025.1.1` (Oakwood) with artifact
 `spring-cloud-starter-gateway-server-webflux`.
 
-**Reason:** Spring Boot 4.0.6 requires Spring Cloud 2025.x release train.
-The artifact name changed from `spring-cloud-starter-gateway` (pre-2025) to
-`spring-cloud-starter-gateway-server-webflux` in the 2025.x train.
+**Reason:** Spring Boot 4.0.6 requires the **2025.1.x** release train. The originally
+chosen `2025.0.1` (Northfields) targets **Spring Boot 3.5.8** and fails *at runtime* on
+Boot 4 with `NoClassDefFoundError org.springframework.boot.web.context.WebServerInitializedEvent`
+(the class moved package in Boot 4). Per Spring Cloud release notes, 2025.0.x is incompatible
+with Boot 4.0.1+; 2025.1.x is the train that adds Boot 4 support.
 
-Version was verified via `./mvnw -pl services/gateway -am dependency:resolve` completing
-successfully with no artifact resolution errors.
+The artifact name `spring-cloud-starter-gateway-server-webflux` is unchanged across both trains.
+
+> **Lesson:** the prior note claimed compatibility was "verified via `dependency:resolve`".
+> That only proves artifacts *resolve* — not that the app *runs*. Compatibility must be
+> verified by actually starting the service.
+
+---
+
+## 11. Custom Rate Limiter Bean Name: `haizzRedisRateLimiter`
+
+**Decision:** The custom `com.haizz.exchange.gateway.ratelimit.RedisRateLimiter` is registered
+as `@Component("haizzRedisRateLimiter")`.
+
+**Reason:** Since the 2025.1 train, `GatewayRedisAutoConfiguration` auto-registers a bean
+literally named `redisRateLimiter`. The custom component (default name `redisRateLimiter`,
+derived from the class name) collided with it → `BeanDefinitionOverrideException` at startup.
+The two are different *types*; `RateLimitFilter` injects by type, so an explicit, non-colliding
+bean name resolves the clash without touching injection.
+
+---
+
+## 12. Exclude Servlet Web Stack from `exchange-common` (gateway only)
+
+**Decision:** The gateway's dependency on `exchange-common` excludes
+`spring-boot-starter-web`.
+
+**Reason:** `exchange-common` declares `spring-boot-starter-web` (Tomcat/WebMVC) as a
+compile dependency. Inherited transitively, it forced a **servlet** `ApplicationContext`,
+which broke Spring Cloud Gateway (requires the **reactive** WebFlux/Netty stack) with
+`No qualifying bean of type WebFluxProperties`. The exclusion is scoped to the gateway module
+only — auth/wallet/marketdata legitimately use the servlet stack and are untouched.
+
+---
+
+## 13. Auth Route Strips `/api/v1` Prefix; Gateway Dev JWT Secret
+
+**Decision (routing):** The `auth` route rewrites `/api/v1/auth/(?<segment>.*)` → `/auth/${segment}`
+before forwarding to the auth service.
+
+**Reason:** Auth exposes its endpoints under `/auth/**`, *not* `/api/v1/auth/**` (unlike wallet
+and market-data, which already use the `/api/v1` prefix internally). Without the rewrite the
+gateway forwarded `/api/v1/auth/register` to auth, which returned 401 for the unknown path.
+
+**Decision (secret):** `application-dev.yml` sets `gateway.jwt.secret` to the same dev value
+auth/wallet use (`dev-secret-key-do-not-use-in-production-32x`).
+
+**Reason:** Auth/wallet sign & verify HS256 tokens with that dev secret (their own
+`application-dev.yml`). The gateway had no dev override and fell back to the
+`application.yml` default, so it rejected valid tokens with 401. Secrets must match across
+all three services in dev.
+
+> **Known minor issue:** on genuine 401s, `JwtAuthenticationFilter.writeErrorResponse` can log a
+> post-commit `UnsupportedOperationException`. The client still receives the correct 401 status
+> and JSON error body; left as a follow-up cleanup.
 
 ---
 
@@ -165,4 +219,4 @@ Setting the WS mapping to `-1` ensures WebSocket upgrade requests to `/ws` are h
 
 ---
 
-*Last updated: 2026-06-13*
+*Last updated: 2026-06-14*

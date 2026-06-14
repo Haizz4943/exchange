@@ -18,8 +18,10 @@
     <description>Haizz Exchange — API Gateway + WebSocket Gateway</description>
 
     <properties>
-        <!-- Spring Cloud 2025.0.1 is the compatible release train for Spring Boot 4.0.x -->
-        <spring-cloud.version>2025.0.1</spring-cloud.version>
+        <!-- Spring Cloud 2025.1.x (Oakwood) is the release train compatible with Spring Boot 4.0.1+.
+             2025.0.x (Northfields) targets Boot 3.5.x and fails at runtime on Boot 4 with
+             NoClassDefFoundError org.springframework.boot.web.context.WebServerInitializedEvent. -->
+        <spring-cloud.version>2025.1.1</spring-cloud.version>
     </properties>
 
     <dependencyManagement>
@@ -35,11 +37,20 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- Shared library -->
+        <!-- Shared library.
+             Exclude the servlet web stack: exchange-common pulls spring-boot-starter-web
+             (Tomcat/WebMVC), which would force a servlet ApplicationContext and break
+             Spring Cloud Gateway — the gateway must run on the reactive WebFlux/Netty stack. -->
         <dependency>
             <groupId>com.haizz.exchange</groupId>
             <artifactId>exchange-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-web</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Spring Cloud Gateway (reactive, Netty-based) -->

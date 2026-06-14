@@ -1,12 +1,17 @@
 spring:
   jpa:
-    show-sql: true
+    show-sql: false
 
 logging:
   level:
     com.haizz.exchange.wallet: DEBUG
+    # Bật khi cần soi SQL (thay cho show-sql, để format đẹp hơn):
+    # org.hibernate.SQL: DEBUG
+    # org.hibernate.orm.jdbc.bind: TRACE
 
 wallet:
   jwt:
     algorithm: HS256
     secret: dev-secret-key-do-not-use-in-production-32x
+  outbox:
+    relay-fixed-delay-ms: 5000

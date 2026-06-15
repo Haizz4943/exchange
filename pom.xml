@@ -21,6 +21,7 @@
         <module>exchange-common</module>
         <module>services/auth</module>
         <module>services/wallet</module>
+        <module>services/order</module>
         <module>services/marketdata</module>
         <module>services/gateway</module>
     </modules>

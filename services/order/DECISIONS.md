@@ -54,3 +54,63 @@ official docs (SRS / System Design / API_SPEC) as appropriate.
 - `assets`, `trading_pairs`, and `fee_schedules` are seeded directly in the V1 migration with the
   values given in the task. Only `TradingPair` has a JPA entity + repository for now; `assets`
   and `fee_schedules` are reference-only and will get entities when needed by later phases.
+
+## Phase 2 — Place Order (SR-030 → SR-037)
+
+### Error codes aligned to API_SPEC
+- The scaffold's client-thrown exceptions carried generic codes; updated to the exact API_SPEC
+  codes so error responses match the contract: `InsufficientBalanceException` →
+  `INSUFFICIENT_AVAILABLE_BALANCE`, `MarketDataUnavailableException` → `MARKET_DATA_UNAVAILABLE`,
+  `WalletUnavailableException` → `WALLET_SERVICE_UNAVAILABLE`.
+- `InvalidOrderException` gained a `(code, message)` constructor so the use case can emit the
+  specific per-rule codes: `INVALID_QUANTITY`, `INVALID_PRICE`, `BELOW_MIN_NOTIONAL`,
+  `INVALID_SIDE`, `INVALID_ORDER_TYPE`, `LIMIT_PRICE_REQUIRED`, `LIMIT_PRICE_NOT_ALLOWED`.
+  (The legacy `(message)` constructor still defaults to `INVALID_ORDER`.)
+- Added `MaxOpenOrdersExceededException` (extends `ValidationException`, 400,
+  `MAX_OPEN_ORDERS_EXCEEDED`). No GlobalExceptionHandler changes were needed — it already maps any
+  `BaseException` generically by its declared status + errorCode.
+
+### DTO decimal handling
+- `PlaceOrderRequest` carries `quantity`/`limit_price` as `String` and parses with `BigDecimal`
+  in the use case (not bean validation) so a bad decimal yields the spec code `INVALID_QUANTITY` /
+  `INVALID_PRICE` rather than a generic `VALIDATION_FAILED`. HTTP-level `@NotBlank` only guards
+  presence. `OrderResponse` renders all decimals via `toPlainString()`; null `limit_price` /
+  `avg_fill_price` are emitted as JSON null.
+
+### Freeze amount formula (SR-034/035)
+- BUY LIMIT:  `qty × limit_price × (1 + takerRate)`, asset = quote_asset.
+- BUY MARKET: `qty × best_ask × (1 + slippage) × (1 + takerRate)`, asset = quote_asset, where
+  `slippage = 0.0005` (constant in the use case) and `best_ask` comes from
+  `MarketDataClient.getTicker(pair)`. A null/≤0 best_ask → `MARKET_DATA_UNAVAILABLE` (503).
+- SELL (LIMIT or MARKET): freeze = `qty`, asset = base_asset.
+- `takerRate` is read from `appProperties.fees().takerRate()` (0.001).
+
+### Freeze rounding scale
+- Quote-asset freeze amounts are rounded to **8 dp using `RoundingMode.UP`** (constant
+  `QUOTE_FREEZE_SCALE = 8`) so we never under-freeze. SELL freeze (= raw qty) is not re-scaled.
+  Not dictated by spec — pick a scale safe against the wallet's quote precision; revisit if the
+  wallet enforces a stricter scale.
+
+### Freeze vs persist ordering & reconciliation
+- Order of operations: validate → compute freeze → `walletClient.freeze(...)` (remote, BEFORE the
+  DB transaction) → `OrderPersister.persist(...)` (one `@Transactional` saving the Order row +
+  enqueuing the `OrderPlaced` outbox event). The transactional persist lives in a separate
+  `OrderPersister` bean so the `@Transactional` proxy applies (self-invocation from the use case
+  would bypass it).
+- The freeze `referenceId` is the generated `orderId` (so freeze is idempotent and a retry is
+  safe). If persist fails AFTER a successful freeze, we log an error tagged for reconciliation —
+  the frozen balance is orphaned until a later phase/cron releases it. This matches the spec's
+  intent that no order/event is produced on the failure path, accepting a rare orphaned-freeze
+  that idempotency + reconciliation can resolve.
+
+### Idempotency window (SR-037)
+- When `client_order_id` is provided, look up an existing order by (userId, clientOrderId) and
+  reject with `DUPLICATE_CLIENT_ORDER_ID` (409) if one exists within the last **24h** (matched
+  against `created_at`). The DB unique index remains the ultimate safety net; the optional 60s
+  app-level window was not separately implemented (24h lookup subsumes it).
+
+### OrderPlaced event payload
+- Populated from `OrderPlacedEvent(orderId, userId, pair, side, type, quantity, price, placedAt)`
+  where `price = limit_price` (null for MARKET) and `placedAt = Instant.now()`. Enqueued via
+  `OrderOutboxPublisher.enqueue("OrderPlaced", orderId, event)`; the relay maps that eventType to
+  `kafka.orderEventsTopic`.

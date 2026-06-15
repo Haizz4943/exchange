@@ -6,7 +6,8 @@
       "PowerShell(curl -X POST http://localhost:8081/auth/register -H \"Content-Type: application/json\" -d '{\"email\": \"alice@example.com\", \"password\": \"Secret1234\"}')",
       "Bash(./mvnw -q -o compile)",
       "Bash(./mvnw compile *)",
-      "Bash(./mvnw -f services/marketdata/pom.xml compile)"
+      "Bash(./mvnw -f services/marketdata/pom.xml compile)",
+      "Bash(dir D:\\\\Project\\\\exchange\\\\services /b)"
     ]
   }
 }

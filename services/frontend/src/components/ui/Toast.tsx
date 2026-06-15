@@ -32,6 +32,7 @@ let toastIdCounter = 0;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [mounted, setMounted] = useState(false);
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const dismiss = useCallback((id: string) => {
@@ -54,6 +55,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     [dismiss],
   );
 
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     const pending = timers.current;
     return () => {
@@ -64,7 +67,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ push, dismiss }}>
       {children}
-      {typeof document !== 'undefined' &&
+      {mounted &&
         createPortal(
           <div
             className="hx-fixed hx-top-4 hx-right-4 hx-z-[9999] hx-flex hx-flex-col hx-gap-2"

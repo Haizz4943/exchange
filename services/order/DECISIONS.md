@@ -153,3 +153,61 @@ official docs (SRS / System Design / API_SPEC) as appropriate.
 - `OrderCancelledEvent(orderId, userId, pair, reason="CANCELLED", cancelledAt=Instant.now())`,
   enqueued via `OrderOutboxPublisher.enqueue("OrderCancelled", orderId, event)`. The relay
   already mapped "OrderCancelled" to `kafka.orderEventsTopic` (no change needed).
+
+## Phase 4 — Read endpoints (SR-041)
+
+### Paged response shape — custom `PageResponse<T>` (not Spring's `Page`)
+- Created `api/dto/PageResponse<T>` (record) with snake_case fields exactly per API_SPEC §3 /
+  §3.7: `content`, `page`, `size`, `total_elements`, `total_pages`. Spring Data's raw `Page`
+  serialization does NOT match this contract (and emits a deprecation warning), so list endpoints
+  map `Page<Order>` → `PageResponse` via `PageResponse.of(page, mapper)`. NOTE: the wallet service
+  returns raw `Page<T>` from its controllers — that shape differs from this spec; we deliberately
+  did not mirror wallet here and instead followed the API_SPEC snake_case contract. Worth
+  back-porting `PageResponse` to wallet for consistency.
+
+### List filtering — JPA `Specification` (over finder methods)
+- `OrderRepository` now also extends `JpaSpecificationExecutor<Order>`. `ListOrdersUseCase` builds
+  a `Specification<Order>` that always pins `userId` and adds optional predicates for `pair`
+  (equals), `state` (IN), and `createdAt` between `from`/`to`. Chosen over explicit finder methods
+  because the optional-filter combinatorics would otherwise require many `findBy...` variants.
+
+### `state` CSV parsing — reject unknown tokens (400), not skip
+- `state` is split on commas, trimmed, upper-cased, and parsed to `OrderState`. An unknown token
+  throws `InvalidOrderException("INVALID_STATE", ...)` → 400, rather than being silently skipped,
+  so a typo surfaces to the caller instead of returning a wrong/over-broad result set. Blank/absent
+  `state` means "all states" (no filter). Shared by the public list and internal endpoints
+  (`ListOrdersUseCase.parseStates` is reused by `ListOpenOrdersUseCase`).
+
+### `sort` parsing — whitelisted fields, snake_case → entity property
+- `sort` (default `created_at,desc`) is parsed in the controller against a whitelist mapping
+  `created_at→createdAt`, `updated_at→updatedAt`. Unknown field or direction → 400
+  (`INVALID_SORT`). Whitelisting avoids exposing arbitrary entity properties / injection via the
+  sort param and bridges the API's snake_case names to JPA property names.
+
+### `from`/`to` parsing — ISO date or ISO instant
+- Accepts a full ISO-8601 instant (`2026-04-01T10:00:00Z`) or a date-only value
+  (`2026-04-01`, interpreted as start-of-day **UTC**). Unparseable input → 400 (`INVALID_DATE`).
+  Both bounds are inclusive on `createdAt` (`>= from`, `<= to`).
+
+### Size clamps
+- Public list (`GET /api/v1/orders`): default 50, clamped to **max 500** (API_SPEC §3.4);
+  size ≤ 0 falls back to the default. Internal (`GET /api/v1/orders/internal/orders`): default
+  1000, clamped to **max 1000** (matches the API_SPEC §3.7 default; prevents an unbounded scan).
+
+### Internal endpoint — path, ordering, projection
+- Path is `/api/v1/orders/internal/orders` (matches the `permitAll` matcher
+  `/api/v1/orders/internal/**` in SecurityConfig). API_SPEC §3.7 writes the path as
+  `/internal/orders`; we use the gateway-prefixed form already permitted in this service. No JWT;
+  no user filter (returns ALL users' open orders) since it feeds the Matching Engine index rebuild.
+- Default `state = OPEN,PARTIALLY_FILLED`. Ordering is **FIFO (`createdAt ASC`)** — this matters
+  for matching priority when the engine rebuilds its book — via repository method
+  `findByStateInOrderByCreatedAtAsc`.
+- Returns a compact `InternalOrderProjection` (`id, userId, pair, side, type, quantity,
+  limitPrice, filledQuantity, createdAt`) with **camelCase** field names per the internal contract
+  in API_SPEC §3.7 (the public `OrderResponse` stays snake_case). Decimals rendered as plain
+  strings, consistent with `OrderResponse`.
+
+### Get-one — ownership vs existence
+- `GET /api/v1/orders/{orderId}`: missing → 404 (`ORDER_NOT_FOUND`); owned by another user → 403
+  (`FORBIDDEN`). Existence is not masked as 404 for non-owners, consistent with the Phase 3 cancel
+  decision. Read use cases are `@Transactional(readOnly = true)`.

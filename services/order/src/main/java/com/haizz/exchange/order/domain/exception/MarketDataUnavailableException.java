@@ -4,10 +4,10 @@ import com.haizz.exchange.common.web.ServiceUnavailableException;
 
 public class MarketDataUnavailableException extends ServiceUnavailableException {
     public MarketDataUnavailableException(String message) {
-        super("MARKETDATA_UNAVAILABLE", message);
+        super("MARKET_DATA_UNAVAILABLE", message);
     }
 
     public MarketDataUnavailableException(String message, Throwable cause) {
-        super("MARKETDATA_UNAVAILABLE", message + ": " + cause.getMessage());
+        super("MARKET_DATA_UNAVAILABLE", message + ": " + cause.getMessage());
     }
 }

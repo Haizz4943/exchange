@@ -114,3 +114,42 @@ official docs (SRS / System Design / API_SPEC) as appropriate.
   where `price = limit_price` (null for MARKET) and `placedAt = Instant.now()`. Enqueued via
   `OrderOutboxPublisher.enqueue("OrderPlaced", orderId, event)`; the relay maps that eventType to
   `kafka.orderEventsTopic`.
+
+## Phase 3 — Cancel order + finalize events (SR-038/039/040)
+
+### Proportional release of frozen funds & rounding
+- On cancel we release only the frozen amount for the still-unfilled portion:
+  `releaseAmount = freezeAmount * (quantity - filledQuantity) / quantity`, computed with
+  `RoundingMode.DOWN` at scale 8. Rounding DOWN guarantees we never over-release more than was
+  frozen (any sub-satoshi remainder stays frozen and is reconciled when the terminal CANCELLED
+  arrives from the matching engine). In this phase there is no matching yet, so
+  `filledQuantity == 0` and the formula short-circuits to the full `freezeAmount` (exact, no
+  rounding). The proportional/rounded branch is implemented now so it is correct once partial
+  fills exist.
+- Guard cases return `BigDecimal.ZERO` (missing/zero quantity, zero-or-negative unfilled
+  remainder, null freeze) so unfreeze of a fully-filled order is a no-op release.
+
+### Unfreeze ordering: persist-then-unfreeze (opposite of place)
+- PlaceOrder freezes BEFORE the DB tx (no order/event on failure). Cancel does the inverse:
+  it persists CANCEL_REQUESTED + the OrderCancelled outbox event in ONE transaction, then calls
+  `walletClient.unfreeze(...)` AFTER commit. Rationale: we must never release funds for a cancel
+  we failed to record. The transactional persist lives in a separate `CancelOrderPersister` bean
+  so the `@Transactional` proxy applies (self-invocation from the use case would bypass it).
+- If the post-commit unfreeze fails, the order is already CANCEL_REQUESTED; we log an error
+  tagged for reconciliation. unfreeze is idempotent by (referenceId=orderId, reason="CANCELLED"),
+  so a retry/reconciliation pass is safe and will not double-release.
+
+### State on cancel
+- Cancel transitions to the intermediate `CANCEL_REQUESTED` (not terminal `CANCELLED`); the API
+  response returns that state per API_SPEC. The terminal `CANCELLED` is applied later when the
+  matching engine confirms removal from the book.
+
+### Ownership vs existence
+- Not-found returns 404 (`ORDER_NOT_FOUND`); an order owned by another user returns 403
+  (`FORBIDDEN` via `com.haizz.exchange.common.web.ForbiddenException`). We do not mask existence
+  as 404 for non-owners — 403 is returned per API_SPEC.
+
+### OrderCancelled event payload
+- `OrderCancelledEvent(orderId, userId, pair, reason="CANCELLED", cancelledAt=Instant.now())`,
+  enqueued via `OrderOutboxPublisher.enqueue("OrderCancelled", orderId, event)`. The relay
+  already mapped "OrderCancelled" to `kafka.orderEventsTopic` (no change needed).

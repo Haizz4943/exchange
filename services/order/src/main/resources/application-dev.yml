@@ -1,0 +1,14 @@
+spring:
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    com.haizz.exchange.order: DEBUG
+
+order:
+  jwt:
+    algorithm: HS256
+    secret: dev-secret-key-do-not-use-in-production-32x
+  outbox:
+    relay-fixed-delay-ms: 5000

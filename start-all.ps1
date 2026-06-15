@@ -1,4 +1,4 @@
-# start-all.ps1 — Khởi động 5 service Haizz Exchange trong Windows Terminal (mỗi service 1 tab)
+# start-all.ps1 — Khởi động 6 service Haizz Exchange trong Windows Terminal (mỗi service 1 tab)
 #
 # Yêu cầu trước: hạ tầng Docker đã chạy (postgres/timescale/redis/kafka):
 #     docker compose up -d
@@ -29,7 +29,7 @@ foreach ($svc in 'postgres','postgres-timescale','redis','kafka') {
 }
 
 # --- giải phóng các port cũ (để start lại sạch) ---
-foreach ($p in 8080, 8081, 8082, 8085, 3000) {
+foreach ($p in 8080, 8081, 8082, 8083, 8085, 3000) {
     $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
     if ($conns) {
         $conns.OwningProcess | Select-Object -Unique | ForEach-Object {
@@ -38,7 +38,7 @@ foreach ($p in 8080, 8081, 8082, 8085, 3000) {
     }
 }
 
-# --- mở 5 tab Windows Terminal ---
+# --- mở 6 tab Windows Terminal ---
 # Java service dùng env SPRING_PROFILES_ACTIVE=dev (kế thừa từ session này);
 # KHÔNG dùng -Dspring-boot.run.profiles=dev vì mvn.cmd trên Windows tách chuỗi ở dấu '.'.
 $run = 'mvn spring-boot:run'
@@ -46,6 +46,7 @@ $run = 'mvn spring-boot:run'
 $wtArgs = @(
     'new-tab', '--title', 'Auth',       '-d', (Join-Path $services 'auth'),       'pwsh', '-NoExit', '-Command', $run,
     ';', 'new-tab', '--title', 'Wallet',     '-d', (Join-Path $services 'wallet'),     'pwsh', '-NoExit', '-Command', $run,
+    ';', 'new-tab', '--title', 'Order',      '-d', (Join-Path $services 'order'),      'pwsh', '-NoExit', '-Command', $run,
     ';', 'new-tab', '--title', 'Gateway',    '-d', (Join-Path $services 'gateway'),    'pwsh', '-NoExit', '-Command', $run,
     ';', 'new-tab', '--title', 'MarketData', '-d', (Join-Path $services 'marketdata'), 'pwsh', '-NoExit', '-Command', $run,
     ';', 'new-tab', '--title', 'Frontend',   '-d', (Join-Path $services 'frontend'),   'pwsh', '-NoExit', '-Command', 'npm run dev'
@@ -54,9 +55,10 @@ $wtArgs = @(
 Start-Process wt -ArgumentList $wtArgs
 
 Write-Host ""
-Write-Host "Đã mở 5 tab trong Windows Terminal (profile=dev):" -ForegroundColor Green
+Write-Host "Đã mở 6 tab trong Windows Terminal (profile=dev):" -ForegroundColor Green
 Write-Host "  Auth        -> http://localhost:8081"
 Write-Host "  Wallet      -> http://localhost:8082"
+Write-Host "  Order       -> http://localhost:8083"
 Write-Host "  Gateway     -> http://localhost:8080"
 Write-Host "  MarketData  -> http://localhost:8085  (chờ 1-5 phút backfill lần đầu)"
 Write-Host "  Frontend    -> http://localhost:3000"

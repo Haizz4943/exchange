@@ -1,6 +1,6 @@
 # TODO — Tiến độ coding (mức tính năng)
 
-> Cập nhật: 2026-06-13. Đối chiếu với `docs/SRS.md §3` (Functional Requirements).
+> Cập nhật: 2026-06-16. Đối chiếu với `docs/SRS.md §3` (Functional Requirements).
 > Legend: ✅ xong · 🟡 đang làm / một phần · ⬜ chưa làm · 🧊 hoãn (post-MVP / Stage 2)
 
 ## Tổng quan theo service
@@ -88,6 +88,7 @@
 - [x] Auth standalone + AuthBridge (Stage 2 token) scaffolded (SR-075)
 - [x] WsClient (multiplex, reconnect) — Gateway đã cấp data real-time (SR-074)
 - [x] 🟢 OrderBook / TradesTape / live-chart — đã có data qua WS Gateway (depth/trade/kline)
+  - 2026-06-16: fix render chart (StrictMode tạo trùng → 2 logo; chart trống khi quay lại pair đã cache) + Toast SSR portal — ở branch `feat/fe-market-data`, **chưa merge vào main**
 - [ ] 🟡 OrderForm-submit + thông báo khớp lệnh — vẫn **stub** (cần Order + Matching service)
 - [ ] 🟡 Live-balance: WS có chạy nhưng wallet chỉ phát delta → chưa cập nhật số dư đầy đủ (xem §3.7)
 - [ ] 🟡 Wallet/Orders/Trades tables — gọi API thật, chờ backend tương ứng
@@ -122,3 +123,28 @@ Thứ tự đề xuất (mỗi mục mở khoá mục sau):
 6. 🟡 Viết test cho Market Data trước khi coi là "done".
 
 Trạng thái hiện tại: **3/4 service lõi xong (auth, wallet, gateway)** + **market-data gần xong** + **FE đã chạy phần read/real-time**. Còn lại order, matching.
+
+---
+
+## 🎯 Bước tiếp theo: Order Service (`services/order`, :8083)
+
+> Spec đầy đủ: `docs/API_SPEC.md §3` (place/cancel/get/list + `/internal/orders`) và `docs/SRS.md §3.3` (SR-030→042).
+> Template cấu trúc: copy layout `services/wallet` (hexagonal: `api / application / domain / infrastructure`, outbox pattern, Flyway migration). Build chung Spring Boot 4 / Java như wallet.
+
+**Tích hợp đã sẵn sàng (không phải dựng lại):**
+- Gateway đã chừa route `/api/v1/orders/**` → hiện trả 503, sẽ hoạt động khi service lên :8083; header `X-User-Id/Email/Roles` đã được inject.
+- Wallet đã có `POST /internal/wallets/freeze` + `/unfreeze` (idempotent theo `referenceType=ORDER, referenceId`) — xem `docs/API_SPEC.md` §Freeze/Unfreeze.
+- Market Data cấp best bid/ask qua ticker (cho freeze amount của MARKET order).
+
+**Việc cần làm (đề xuất thứ tự):**
+1. ⬜ Scaffold service: pom/Dockerfile theo wallet, package `com.haizz.exchange.order`, port 8083, Flyway migration bảng `orders` + `order_outbox`.
+2. ⬜ Domain: `Order` aggregate + state machine (NEW→OPEN→PARTIALLY_FILLED→FILLED / CANCELLED / REJECTED) theo §3.4 spec.
+3. ⬜ Place order (`POST /api/v1/orders`): validate type/price (MARKET vs LIMIT), business rules (tickSize/stepSize/minNotional, ≤100 open orders/pair), idempotency `client_order_id` (24h), tính freeze amount, **sync call Wallet freeze**, persist Order(NEW)+outbox trong 1 transaction.
+4. ⬜ Cancel (`DELETE /api/v1/orders/{id}`) — chỉ NEW/PARTIALLY_FILLED; unfreeze phần còn lại.
+5. ⬜ Get + List orders (filter state/pair/date, phân trang) — §3.3/§3.4.
+6. ⬜ `/internal/orders` projection (cho Matching Engine startup nạp lệnh OPEN).
+7. ⬜ Outbox relay publish `OrderPlaced` / `OrderCancelled` (Kafka), tái dùng pattern outbox của wallet.
+8. ⬜ Consume `TradeExecuted` (khi Matching có) để cập nhật filled qty + state — có thể để stub/TODO ở bước này, hoàn thiện cùng Matching.
+9. ⬜ Unit test state machine + validation + idempotency.
+
+**Lưu ý quyết định:** ghi các judgment-call không có trong spec vào `services/order/DECISIONS.md` (theo convention các service khác).

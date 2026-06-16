@@ -3,7 +3,6 @@
 import React from 'react';
 import { useWsSubscription } from '@/lib/ws/useWsSubscription';
 import { useTradeStore } from '@/features/trade/store';
-import { Skeleton } from '@/components/ui/Skeleton';
 import { formatPrice, formatQuantity } from '@/lib/utils/bigNumber';
 import { formatTime } from '@/lib/utils/format';
 
@@ -22,13 +21,8 @@ export function TradesTape({ pair }: TradesTapeProps) {
       </p>
 
       {trades.length === 0 && (
-        <div className="hx-p-3">
-          <div className="hx-text-xs hx-text-amber-400 hx-bg-amber-50 dark:hx-bg-amber-900/20 hx-border hx-border-amber-200 dark:hx-border-amber-800 hx-rounded hx-p-2 hx-mb-3">
-            Live trades require WebSocket Gateway (not yet deployed)
-          </div>
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} height={16} className="hx-w-full hx-mb-1" />
-          ))}
+        <div className="hx-p-3 hx-text-xs hx-text-gray-400 hx-text-center">
+          No recent trades yet
         </div>
       )}
 

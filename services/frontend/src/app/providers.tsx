@@ -28,9 +28,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <AuthStandaloneProvider>
           <WsProvider>
-            <PanelStoreProviders>
-              <ToastProvider>{children}</ToastProvider>
-            </PanelStoreProviders>
+            <ToastProvider>
+              <PanelStoreProviders>{children}</PanelStoreProviders>
+            </ToastProvider>
           </WsProvider>
         </AuthStandaloneProvider>
       </QueryClientProvider>

@@ -202,3 +202,60 @@ API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 - Graceful fallback: on call failure/empty, log a WARN and derive metadata from the symbol
   (quote = `USDT`, base = symbol minus the `USDT` suffix) so fee/trade-event resolution never
   blocks a fill. Used to resolve baseAsset/quoteAsset for fees + the trade event.
+
+## Phase 4 — Unit tests, trades read endpoint, docs (SR-055–059)
+
+### Test strategy: pure unit, no Spring / no Testcontainers
+- All tests are plain JUnit 5 + Mockito + AssertJ (no `@SpringBootTest`, no Kafka/Postgres
+  Testcontainers), mirroring the Order service's `domain/*Test` style. They run in ~1s.
+  Rationale: the core matching logic is pure once collaborators are mocked, so a fast unit
+  suite gives the highest signal per second; a real Kafka/Postgres integration suite is left as
+  a follow-up (tracked in TODO §3.4). The module still declares the Testcontainers deps for that
+  later phase.
+- `BigDecimal` assertions use `isEqualByComparingTo` (compareTo), never `equals`, to avoid scale
+  mismatches (e.g. `60000` vs `60000.00000000`).
+- Collaborators stubbed/captured with Mockito: `MarketOrderMatcher` and `LimitOrderMatcher` are
+  tested by mocking `FillEmitter` and capturing the emitted `List<Fill>` + the
+  terminalFilled/marketPartial flags — i.e. asserting the fills/events that WOULD be persisted,
+  not the DB rows. `FillEmitter` itself is tested with a mocked `TradeRepository` /
+  `MatchingOutboxPublisher` / `MarketDataClient`, capturing the `Trade` saved and the
+  `TradeExecuted` / lifecycle events enqueued.
+
+### No production refactor was required for testability
+- The phase-1–3 seams (matchers delegate the persisted batch to `FillEmitter`;
+  `OpenOrdersIndex` / `FeedStatusRegistry` are plain components) were already pure enough to unit
+  test directly. No helper-extraction or behavior-preserving refactor of `src/main` was needed —
+  runtime behavior is unchanged.
+- One Mockito note: `FillEmitterTest.setUp()` stubs `getPairMetadata` with
+  `lenient()` because the `emitRejected` test path never resolves metadata (strict stubbing would
+  otherwise flag it as unnecessary).
+
+### Test coverage map (50 tests)
+- `OpenOrdersIndexTest` (12): add/get/remove roundtrip, unknown order/pair, BUY/SELL eligibility
+  (`>=` / `<=` externalPrice), FIFO ordering across price levels and within a level, empty/no-match
+  edges, removed order not eligible, MARKET tracked-by-id-but-never-eligible.
+- `MarketOrderMatcherTest` (10): BUY walks asks (3 fills 0.5/0.3/0.2 at `×1.0005`, last=final),
+  fullyFilled vs MARKET_PARTIAL flags, VWAP range, depth-exhausted partial → auto-cancel,
+  SELL walks bids `×0.9995`, slippage direction, degraded reject (no depth call), empty depth /
+  depth-fetch-throws reject, zero-qty levels skipped.
+- `LimitOrderMatcherTest` (9): degraded skip, BUY fill = `min(limit, external)`,
+  SELL fill = `max(limit, external)` (both directions), fully-filled removed + final,
+  partial stays + not final, external volume distributed FIFO across orders until exhausted,
+  zero-remaining orders skipped.
+- `FillEmitterTest` (9): BUY fee in baseAsset = `qty×takerRate`, SELL fee in quoteAsset =
+  `qty×price×takerRate`, `quoteQuantity = qty×price`, role always TAKER, residual = 0 /
+  residualAsset null, isFinalFill propagation, OrderFilled VWAP avgPrice, OrderPartiallyFilled
+  (no cancel), MARKET_PARTIAL emits partial-then-cancel, emitRejected emits OrderCancelled with
+  no Trade.
+- `FeedStatusRegistryTest` (5) + `ResidentOrderTest` (3) + `TradesControllerTest` (2).
+
+### Trades read endpoint — `GET /api/v1/trades`
+- Added `TradesController` (`api`) + `TradeResponse` / `PageResponse<T>` DTOs (`api/dto`) +
+  `TradeRepository.findByUserIdOrderByExecutedAtDesc(userId, pageable)`. JWT-authenticated; userId
+  from `jwt.getSubject()`; newest-first; page size clamped to 200 (default 50). `SecurityConfig`
+  already authenticates everything outside `/api/v1/matching/internal/**` + `/actuator/**`, so no
+  security change was needed; the gateway already routes `/api/v1/trades/**` → :8084.
+- DTOs are snake_case (`order_id`, `quote_quantity`, `fee_amount`, `executed_at`, `total_elements`,
+  `total_pages`) via `@JsonProperty`, mirroring the public API contract used elsewhere. `PageResponse`
+  is matching's own copy (Order's `PageResponse` is not on this branch's classpath) with the same
+  field shape, so the gateway-facing JSON is consistent.

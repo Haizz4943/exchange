@@ -24,6 +24,7 @@
         <module>services/order</module>
         <module>services/marketdata</module>
         <module>services/gateway</module>
+        <module>services/matching</module>
     </modules>
 
     <properties>

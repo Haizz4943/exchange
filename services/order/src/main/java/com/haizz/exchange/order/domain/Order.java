@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -110,11 +111,112 @@ public class Order {
     }
 
     /**
-     * Marks the order as cancel-requested. Full lifecycle transitions and
-     * guards are fleshed out in a later phase.
+     * Scale at which the running VWAP {@code avgFillPrice} is kept (SR-042).
+     * Matches the {@code avg_fill_price} column precision (scale 18).
+     */
+    public static final int AVG_PRICE_SCALE = 18;
+
+    /**
+     * Applies a fill to this order (SR-042). Increases {@code filledQuantity} by
+     * {@code fillQty} and recomputes {@code avgFillPrice} as the running VWAP:
+     * <pre>((avgFillPrice × prevFilled) + fillPrice × fillQty) / (prevFilled + fillQty)</pre>
+     * rounded HALF_UP at scale {@value #AVG_PRICE_SCALE}.
+     *
+     * <p>State transition: if the cumulative filled quantity reaches
+     * {@code quantity} the order becomes {@link OrderState#FILLED}; otherwise
+     * {@link OrderState#PARTIALLY_FILLED}. A fill is accepted from
+     * NEW / OPEN / PARTIALLY_FILLED / CANCEL_REQUESTED.
+     *
+     * <p><b>Terminal precedence (SRS Appendix):</b> a fill completing the order
+     * wins over a pending cancel — CANCEL_REQUESTED → FILLED is allowed here.
+     *
+     * @throws IllegalStateException    if the order is already terminal
+     * @throws IllegalArgumentException if {@code fillQty} ≤ 0, {@code fillPrice} &lt; 0,
+     *                                  or the fill would overfill (filled &gt; quantity)
+     */
+    public void applyFill(BigDecimal fillQty, BigDecimal fillPrice) {
+        if (fillQty == null || fillQty.signum() <= 0) {
+            throw new IllegalArgumentException("fillQty must be positive: " + fillQty);
+        }
+        if (fillPrice == null || fillPrice.signum() < 0) {
+            throw new IllegalArgumentException("fillPrice must be non-negative: " + fillPrice);
+        }
+        if (this.state.isTerminal()) {
+            throw new IllegalStateException(
+                    "Cannot apply fill to a terminal order in state " + this.state);
+        }
+
+        BigDecimal prevFilled = this.filledQuantity != null
+                ? this.filledQuantity : BigDecimal.ZERO;
+        BigDecimal newFilled = prevFilled.add(fillQty);
+        if (newFilled.compareTo(this.quantity) > 0) {
+            throw new IllegalArgumentException(
+                    "Fill would overfill order: filled=" + newFilled
+                            + " exceeds quantity=" + this.quantity);
+        }
+
+        // Running VWAP over the cumulative filled quantity.
+        BigDecimal prevAvg = this.avgFillPrice != null ? this.avgFillPrice : BigDecimal.ZERO;
+        BigDecimal numerator = prevAvg.multiply(prevFilled).add(fillPrice.multiply(fillQty));
+        this.avgFillPrice = numerator.divide(newFilled, AVG_PRICE_SCALE, RoundingMode.HALF_UP);
+        this.filledQuantity = newFilled;
+
+        this.state = newFilled.compareTo(this.quantity) == 0
+                ? OrderState.FILLED
+                : OrderState.PARTIALLY_FILLED;
+    }
+
+    /**
+     * Moves a freshly-accepted order onto the book: NEW → OPEN.
+     * Idempotent if already OPEN; rejects any other (terminal/filled) state.
+     */
+    public void markOpen() {
+        if (this.state == OrderState.OPEN) {
+            return;
+        }
+        if (this.state != OrderState.NEW) {
+            throw new IllegalStateException("Cannot open order in state " + this.state);
+        }
+        this.state = OrderState.OPEN;
+    }
+
+    /**
+     * Requests cancellation: NEW / OPEN / PARTIALLY_FILLED → CANCEL_REQUESTED.
+     * @throws IllegalStateException if the order is not cancellable (terminal or
+     *                               already CANCEL_REQUESTED).
      */
     public void markCancelRequested() {
+        if (!this.state.isCancellable()) {
+            throw new IllegalStateException(
+                    "Order in state " + this.state + " is not cancellable");
+        }
         this.state = OrderState.CANCEL_REQUESTED;
+    }
+
+    /**
+     * Applies the terminal cancellation confirmed by the matching engine:
+     * CANCEL_REQUESTED (or NEW / OPEN / PARTIALLY_FILLED) → CANCELLED.
+     * @throws IllegalStateException if the order is already terminal.
+     */
+    public void markCancelled() {
+        if (this.state.isTerminal()) {
+            throw new IllegalStateException(
+                    "Cannot cancel a terminal order in state " + this.state);
+        }
+        this.state = OrderState.CANCELLED;
+    }
+
+    /**
+     * Rejects a brand-new order (e.g. validation/admission failure): NEW → REJECTED.
+     * @throws IllegalStateException if the order has already left NEW.
+     */
+    public void markRejected(String reason) {
+        if (this.state != OrderState.NEW) {
+            throw new IllegalStateException(
+                    "Only a NEW order can be rejected; state was " + this.state);
+        }
+        this.state = OrderState.REJECTED;
+        this.rejectionReason = reason;
     }
 
     @PrePersist

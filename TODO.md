@@ -11,7 +11,7 @@
 | Wallet | 8082 | ✅ Xong | |
 | Market Data | 8085 | 🟡 Gần xong | Code đủ tính năng, **thiếu test thật** |
 | Frontend | 3000 | 🟡 Scaffold | Auth/Wallet/Chart/OrderBook/TradesTape wired qua Gateway; OrderForm-submit + khớp lệnh còn stub (chờ Order/Matching) |
-| Order | 8083 | ⬜ Chưa làm | Chưa có thư mục service (Gateway đã để sẵn route → 503) |
+| Order | 8083 | 🟡 Gần xong | Place/cancel/get/list + `/internal/orders` + outbox + state machine xong; consumer khớp lệnh (`matching.events.v1`) còn **stub** chờ Matching Engine |
 | Matching Engine | 8084 | ⬜ Chưa làm | Chưa có thư mục service (Gateway đã để sẵn route + mapping WS) |
 | API + WS Gateway | 8080 | ✅ Xong | HS256 dev; route+JWT+rate-limit+WS fan-out; build xanh, 13 unit test. live-balance còn nửa-stub (wallet phát delta) |
 | Hạ tầng (Docker) | — | ✅ Xong | postgres, timescale, redis, kafka |
@@ -40,17 +40,18 @@
 - [x] Optimistic lock chống lost update (SR-023)
 - [x] Consume `trade.executed`, publish `wallet.transactions.v1`
 
-## 3.3 Order Management — ⬜ (chưa bắt đầu)
+## 3.3 Order Management — 🟡 (gần xong; consumer khớp lệnh còn stub)
 
-- [ ] Market order: quantity / quoteOrderQty (SR-030)
-- [ ] Limit order: price + quantity, TIF=GTC (SR-031, SR-032)
-- [ ] Validate minNotional / tickSize / stepSize (SR-033)
-- [ ] Check available balance + freeze khi đặt lệnh (SR-034, SR-035)
-- [ ] orderId UUID + clientOrderId idempotency (SR-036, SR-037)
-- [ ] Cancel lệnh NEW / PARTIALLY_FILLED (SR-038, SR-039)
-- [ ] Publish `OrderPlaced` / `OrderCancelled` (SR-040)
-- [ ] Read endpoint orders (filter status/pair/date) (SR-041)
-- [ ] Order state machine + ack < 500ms p95 (SR-042)
+- [x] Market order: quantity / quoteOrderQty (SR-030)
+- [x] Limit order: price + quantity, TIF=GTC (SR-031, SR-032)
+- [x] Validate minNotional / tickSize / stepSize (SR-033) — `domain/OrderValidator`
+- [x] Check available balance + freeze khi đặt lệnh (SR-034, SR-035) — `domain/FreezeCalculator` + sync call Wallet
+- [x] orderId UUID + clientOrderId idempotency (SR-036, SR-037)
+- [x] Cancel lệnh NEW / PARTIALLY_FILLED (SR-038, SR-039)
+- [x] Publish `OrderPlaced` / `OrderCancelled` (SR-040) — outbox relay
+- [x] Read endpoint orders (filter status/pair/date) + `/internal/orders` (SR-041)
+- [x] Order state machine (NEW→OPEN→PARTIALLY_FILLED→FILLED / CANCELLED / REJECTED, terminal-precedence) + unit test (SR-042)
+- [ ] 🟡 Consume `matching.events.v1` để cập nhật filled qty + state — **stub** (`OrderEventConsumer` + `ProcessFillEventUseCase`, log+TODO), hoàn thiện cùng Matching Engine
 
 ## 3.4 Matching Engine (Simulation) — ⬜ (chưa bắt đầu)
 
@@ -116,7 +117,7 @@
 Thứ tự đề xuất (mỗi mục mở khoá mục sau):
 
 1. ✅ **API + WS Gateway** — gom REST + real-time. FE chạy được auth + wallet + chart + orderbook + tradestape qua `:8080`.
-2. ⬜ **Order Service** — đặt/hủy lệnh, freeze qua Wallet (đã sẵn sàng nhận). Gateway đã để sẵn route.
+2. 🟡 **Order Service** — đặt/hủy/đọc lệnh + freeze qua Wallet + outbox + state machine **xong**; còn consumer `matching.events.v1` (stub) hoàn thiện cùng Matching. Gateway đã để sẵn route.
 3. ⬜ **Matching Engine** — fill theo Market Data (đã sẵn sàng cấp data) → `TradeExecuted` → Wallet/Order cập nhật. Gateway đã chừa mapping WS `matching.events.v1` → channel `orders`.
 4. 🟡 Hoàn thiện FE (bỏ stub OrderForm-submit + thông báo khớp lệnh) sau khi (2)(3) xong.
 5. 🟡 Back-port wallet event để live-balance đủ (absolute balance) + viết integration test cho Gateway.
@@ -137,14 +138,14 @@ Trạng thái hiện tại: **3/4 service lõi xong (auth, wallet, gateway)** + 
 - Market Data cấp best bid/ask qua ticker (cho freeze amount của MARKET order).
 
 **Việc cần làm (đề xuất thứ tự):**
-1. ⬜ Scaffold service: pom/Dockerfile theo wallet, package `com.haizz.exchange.order`, port 8083, Flyway migration bảng `orders` + `order_outbox`.
-2. ⬜ Domain: `Order` aggregate + state machine (NEW→OPEN→PARTIALLY_FILLED→FILLED / CANCELLED / REJECTED) theo §3.4 spec.
-3. ⬜ Place order (`POST /api/v1/orders`): validate type/price (MARKET vs LIMIT), business rules (tickSize/stepSize/minNotional, ≤100 open orders/pair), idempotency `client_order_id` (24h), tính freeze amount, **sync call Wallet freeze**, persist Order(NEW)+outbox trong 1 transaction.
-4. ⬜ Cancel (`DELETE /api/v1/orders/{id}`) — chỉ NEW/PARTIALLY_FILLED; unfreeze phần còn lại.
-5. ⬜ Get + List orders (filter state/pair/date, phân trang) — §3.3/§3.4.
-6. ⬜ `/internal/orders` projection (cho Matching Engine startup nạp lệnh OPEN).
-7. ⬜ Outbox relay publish `OrderPlaced` / `OrderCancelled` (Kafka), tái dùng pattern outbox của wallet.
-8. ⬜ Consume `TradeExecuted` (khi Matching có) để cập nhật filled qty + state — có thể để stub/TODO ở bước này, hoàn thiện cùng Matching.
-9. ⬜ Unit test state machine + validation + idempotency.
+1. ✅ Scaffold service: pom/Dockerfile theo wallet, package `com.haizz.exchange.order`, port 8083, Flyway migration bảng `orders` + `order_outbox`.
+2. ✅ Domain: `Order` aggregate + state machine (NEW→OPEN→PARTIALLY_FILLED→FILLED / CANCELLED / REJECTED, terminal-precedence) theo §3.4 spec.
+3. ✅ Place order (`POST /api/v1/orders`): validate type/price (MARKET vs LIMIT), business rules (tickSize/stepSize/minNotional, ≤100 open orders/pair), idempotency `client_order_id` (24h), tính freeze amount, **sync call Wallet freeze**, persist Order(NEW)+outbox trong 1 transaction.
+4. ✅ Cancel (`DELETE /api/v1/orders/{id}`) — chỉ NEW/PARTIALLY_FILLED; unfreeze phần còn lại.
+5. ✅ Get + List orders (filter state/pair/date, phân trang) — §3.3/§3.4.
+6. ✅ `/internal/orders` projection (cho Matching Engine startup nạp lệnh OPEN).
+7. ✅ Outbox relay publish `OrderPlaced` / `OrderCancelled` (Kafka), tái dùng pattern outbox của wallet.
+8. 🟡 Consume khớp lệnh (`matching.events.v1`) để cập nhật filled qty + state — **stub** (`OrderEventConsumer` deserialize EventEnvelope + switch eventType → `ProcessFillEventUseCase` log+TODO, fail-soft); hoàn thiện cùng Matching.
+9. ✅ Unit test state machine + validation + freeze calc (31 test, pure-unit, không cần Docker).
 
 **Lưu ý quyết định:** ghi các judgment-call không có trong spec vào `services/order/DECISIONS.md` (theo convention các service khác).

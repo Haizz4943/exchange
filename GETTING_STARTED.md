@@ -88,6 +88,31 @@ docker exec exchange-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loc
 
 ---
 
+## Cách nhanh nhất — chạy tất cả service (`start-all.ps1`)
+
+Sau khi infra (Bước 2) đã healthy, mở **7 tab** service trong Windows Terminal bằng một lệnh:
+
+```ps
+cd D:\Project\exchange
+pwsh -ExecutionPolicy Bypass -File .\start-all.ps1
+```
+
+Script mở: **Auth (8081), Wallet (8082), Order (8083), Gateway (8080), MarketData (8085), Matching (8084), Frontend (3000)** — mỗi service 1 tab, profile `dev`. Lần đầu mỗi Java service compile ~20–40s; MarketData cần thêm 1–5 phút backfill.
+
+> Toàn bộ luồng end-to-end đi qua **API Gateway `:8080`** (FE chỉ gọi `:8080`). Các bước chạy từng service bên dưới dành cho khi cần chạy/đdebug riêng lẻ.
+
+| Service | Port | Phụ thuộc khi khởi động |
+|---------|------|------------------------|
+| Auth | 8081 | postgres, kafka |
+| Wallet | 8082 | postgres, kafka (nghe `user.events.v1`, `trade.executed`) |
+| Order | 8083 | postgres (`order_db`), kafka, **Wallet** (freeze), **MarketData** (ticker cho MARKET) |
+| Matching | 8084 | postgres (`match_db`), kafka, **MarketData** (depth/health), **Order** (`/internal/orders` rebuild lúc start) |
+| MarketData | 8085 | timescale, redis, kafka, internet (Binance) |
+| Gateway | 8080 | redis, kafka; route tới các service trên |
+| Frontend | 3000 | Gateway `:8080` |
+
+---
+
 ## Bước 3 — Chạy Auth Service (port 8081)
 
 ### Cách 1: Dùng Maven Wrapper (terminal)
@@ -135,6 +160,20 @@ Xem cấu hình launch.json ở Bước 6.
 Started WalletApplication in X.XXX seconds
 Tomcat started on port 8082
 ```
+
+---
+
+## Bước 4.5 — Chạy Order Service (port 8083)
+
+Order Service cần **Wallet Service** (gọi freeze số dư khi đặt lệnh) và **Market Data Service** (lấy best ask cho lệnh MARKET). DB riêng `order_db`.
+
+```ps
+cd D:\Project\exchange\services\order
+$env:SPRING_PROFILES_ACTIVE="dev"
+mvn spring-boot:run
+```
+
+Start thành công khi thấy `Started OrderApplication ... Tomcat started on port 8083`.
 
 ---
 
@@ -202,6 +241,22 @@ curl http://localhost:8085/actuator/health/readiness
 
 ---
 
+## Bước 5.5 — Chạy Matching Engine (port 8084)
+
+Matching Engine mô phỏng khớp lệnh theo dữ liệu Binance (không P2P). Cần **Market Data** (depth + feed health), **Order Service** (nạp lệnh OPEN lúc startup qua `/api/v1/orders/internal/orders`), kafka. DB riêng `match_db`.
+
+```ps
+cd D:\Project\exchange\services\matching
+$env:SPRING_PROFILES_ACTIVE="dev"
+mvn spring-boot:run
+```
+
+Start thành công khi thấy `Started MatchingApplication ... Tomcat started on port 8084`.
+
+> Luồng: đặt lệnh (Order) → `orders.events.v1` → Matching khớp theo Binance → `trade.executed` (Wallet ghi sổ) + `matching.events.v1` (Order cập nhật state + FE nhận realtime qua WS Gateway channel `orders`).
+
+---
+
 ## Bước 6 — Chạy Frontend (port 3000)
 
 Frontend là app Next.js (`services/frontend`, package `haizz-trading-panel`) — App Router + TypeScript + Tailwind (prefix `hx-`).
@@ -217,19 +272,11 @@ npm run dev
 
 Mở http://localhost:3000
 
-### ⚠️ Lưu ý: cần API Gateway để chạy full
+### API Gateway
 
-Frontend được thiết kế gọi **một API Gateway duy nhất** qua `NEXT_PUBLIC_GATEWAY_URL` (mặc định `http://localhost:8080`). **Gateway chưa được build**, nên:
+Frontend gọi **một API Gateway duy nhất** qua `NEXT_PUBLIC_GATEWAY_URL` (mặc định `http://localhost:8080`). Gateway **đã được build** và gom REST + WS của mọi service về `:8080` — chạy Gateway (`services/gateway`) cùng các service backend là FE hoạt động đầy đủ.
 
-- UI render bình thường, nhưng các call `/api/v1/auth`, `/api/v1/wallets`, `/udf/*` đều trỏ tới `:8080` → fail (các service thật nằm ở cổng khác nhau: 8081 / 8082 / 8085).
-- Để test **riêng chart** ngay bây giờ, trỏ tạm gateway sang Market Data Service trong `services/frontend/.env.local`:
-  ```
-  NEXT_PUBLIC_GATEWAY_URL=http://localhost:8085
-  ```
-  (chart `/udf/*` chạy đúng; auth/wallet sẽ hỏng vì khác cổng)
-- Giải pháp đúng là dựng **API Gateway** gom mọi service về `:8080` (đang pending).
-
-Trạng thái tính năng hiện tại: **Auth / Wallet / Chart** đã wired thật; **OrderBook / OrderForm / TradesTape** đang stub (chờ WS Gateway + Order/Matching service).
+Trạng thái tính năng: **Auth / Wallet / Chart / OrderBook / TradesTape** đã wired thật qua Gateway. **OrderForm-submit + thông báo khớp lệnh** vẫn đang stub ở FE (backend Order/Matching đã sẵn sàng — chỉ còn nối FE).
 
 ---
 
@@ -411,6 +458,56 @@ curl "http://localhost:8082/api/v1/wallet-transactions?page=0&size=50" \
 ```
 
 ---
+
+### Order (qua Gateway `:8080`)
+
+> Cần nạp USDT (deposit) trước để có số dư khả dụng cho lệnh BUY.
+
+#### Đặt lệnh LIMIT BUY
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"pair\":\"BTCUSDT\",\"side\":\"BUY\",\"type\":\"LIMIT\",\"quantity\":\"0.001\",\"limit_price\":\"50000\",\"client_order_id\":\"ord-001\"}"
+```
+
+**Response 201:** order `state=NEW`, `freeze_amount`/`freeze_asset` đã tính; số dư USDT chuyển sang `frozen` (xem lại `/api/v1/wallets/me`).
+
+#### Đặt lệnh MARKET BUY
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"pair\":\"BTCUSDT\",\"side\":\"BUY\",\"type\":\"MARKET\",\"quantity\":\"0.001\"}"
+```
+
+#### Xem 1 lệnh / danh sách lệnh
+
+```bash
+curl http://localhost:8080/api/v1/orders/<ORDER_ID> -H "Authorization: Bearer <TOKEN>"
+curl "http://localhost:8080/api/v1/orders?pair=BTCUSDT&state=NEW,OPEN,PARTIALLY_FILLED&page=0&size=50" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+#### Hủy lệnh (chỉ NEW / OPEN / PARTIALLY_FILLED)
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/orders/<ORDER_ID> -H "Authorization: Bearer <TOKEN>"
+```
+
+→ `state=CANCEL_REQUESTED`, phần freeze còn lại được hoàn về `available`.
+
+---
+
+### Trades (Matching Engine, qua Gateway `:8080`)
+
+```bash
+curl "http://localhost:8080/api/v1/trades?page=0&size=50" -H "Authorization: Bearer <TOKEN>"
+```
+
+Mỗi fill tạo 1 `Trade` (giá, qty, fee taker 0.10%, role TAKER). Khi lệnh khớp: Wallet trừ `frozen` + cộng `available` (trừ fee), Order cập nhật `filled_qty`/`state`.
 
 ---
 
@@ -714,6 +811,22 @@ Wallet Service (port 8082)
                               →  consume  trade.executed
                               →  publish  wallet.transactions.v1
 
+Order Service (port 8083)
+    ├── PostgreSQL :5432      →  order_db
+    ├── HTTP                  →  Wallet  /api/v1/wallets/internal/freeze|unfreeze
+    │                         →  MarketData  /internal/ticker (freeze lệnh MARKET)
+    └── Kafka :9092           →  publish  orders.events.v1   (EventEnvelope, via outbox)
+                              →  consume  matching.events.v1 (áp fill + release residual)
+
+Matching Engine (port 8084)
+    ├── PostgreSQL :5432      →  match_db  (trades, matching_outbox)
+    ├── HTTP                  →  MarketData  /internal/depth, /internal/market-data/health
+    │                         →  Order  /api/v1/orders/internal/orders (rebuild index lúc start)
+    └── Kafka :9092           →  consume  orders.events.v1
+                              →  consume  market-data.events.v1 (external trade + feed health)
+                              →  publish  trade.executed       (cho Wallet ghi sổ)
+                              →  publish  matching.events.v1   (Order state + WS Gateway)
+
 Market Data Service (port 8085)
     ├── TimescaleDB :5433     →  marketdata_db  (candlesticks hypertable)
     ├── Redis :6379           →  depth cache (TTL 5s)
@@ -726,8 +839,13 @@ Market Data Service (port 8085)
     └── Binance API           →  REST: exchange info, kline backfill
                               →  WebSocket: trade + depth20 + kline streams
 
+API + WS Gateway (port 8080)
+    ├── Redis :6379           →  rate limiting (token-bucket Lua), WS subscriptions
+    ├── HTTP route            →  auth/wallet/order/marketdata/trades theo path prefix
+    │                            (validate JWT, inject X-User-Id/Email/Roles)
+    └── Kafka :9092           →  WS fan-out: matching.events.v1→orders,
+                                  wallet.transactions.v1→wallet, market-data.*→price
+
 Frontend (port 3000)
-    └── API Gateway :8080     →  (CHƯA CÓ) gom REST + WS của mọi service
-                                  tạm thời trỏ NEXT_PUBLIC_GATEWAY_URL sang
-                                  service cụ thể (vd :8085) để test riêng chart
+    └── API Gateway :8080     →  gom REST + WS của mọi service (NEXT_PUBLIC_GATEWAY_URL)
 ```

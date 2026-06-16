@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
@@ -59,14 +60,27 @@ public class OpenOrdersIndex {
     }
 
     /**
-     * Returns resident limit orders on {@code side} of {@code pair} that are
-     * eligible to match against an external price, in FIFO (price-time) order.
+     * Returns resident LIMIT orders on {@code side} of {@code pair} that are eligible to
+     * match against an external trade at {@code externalPrice}, in FIFO (oldest-first) order.
      *
-     * <p>STUB: real selection logic lands in the matching-core phase.
+     * <p>Eligibility rule:
+     * <ul>
+     *   <li>BUY (bid) limit orders are eligible when {@code limitPrice >= externalPrice}
+     *       (willing to buy at or above the external price).</li>
+     *   <li>SELL (ask) limit orders are eligible when {@code limitPrice <= externalPrice}
+     *       (willing to sell at or below the external price).</li>
+     * </ul>
+     *
+     * <p>Returned in FIFO order across the whole eligible set (oldest {@code createdAt} first),
+     * which is the spec'd price-time fairness.
      */
     public List<ResidentOrder> eligibleLimitOrders(String pair, OrderSide side,
                                                    BigDecimal externalPrice) {
-        return Collections.emptyList();
+        PerPairIndex idx = byPair.get(pair);
+        if (idx == null) {
+            return Collections.emptyList();
+        }
+        return idx.eligible(side, externalPrice);
     }
 
     /**
@@ -108,6 +122,26 @@ public class OpenOrdersIndex {
 
         ResidentOrder get(UUID orderId) {
             return byId.get(orderId);
+        }
+
+        /**
+         * Collect eligible LIMIT orders on {@code side} for an external price, sorted
+         * oldest-first (FIFO across the eligible set).
+         */
+        List<ResidentOrder> eligible(OrderSide side, BigDecimal externalPrice) {
+            TreeMap<BigDecimal, Deque<ResidentOrder>> book = book(side);
+            List<ResidentOrder> result = new ArrayList<>();
+            for (Map.Entry<BigDecimal, Deque<ResidentOrder>> entry : book.entrySet()) {
+                BigDecimal limitPrice = entry.getKey();
+                boolean priceEligible = side == OrderSide.BUY
+                        ? limitPrice.compareTo(externalPrice) >= 0
+                        : limitPrice.compareTo(externalPrice) <= 0;
+                if (priceEligible) {
+                    result.addAll(entry.getValue());
+                }
+            }
+            result.sort(Comparator.comparing(ResidentOrder::getCreatedAt));
+            return result;
         }
 
         private TreeMap<BigDecimal, Deque<ResidentOrder>> book(OrderSide side) {

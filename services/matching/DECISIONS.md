@@ -122,3 +122,83 @@ API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
   crashing. A retry/reconnect is left as a TODO.
 - Rebuild mutates the index directly (single rebuild thread, before live event traffic matters);
   once consumers are driving events all further mutation goes through the per-pair executor.
+
+## Phase 3 — Core matching: fills, trades, event emission (SR-051–058)
+
+### Replaced no-op hooks with real impls
+- Deleted `NoOpMarketOrderHook` / `NoOpLimitMatchHook`; added `MarketOrderMatcher`
+  (implements `MarketOrderHook`) and `LimitOrderMatcher` (implements `LimitMatchHook`),
+  each a plain `@Component`. Spring now injects the single real bean per interface into the
+  dispatchers — no rewiring of consumers/dispatchers needed (the seams from phase 2 held).
+
+### Market order: walk-the-book + slippage + VWAP
+- BUY walks `asks`, SELL walks `bids` (the depth response already orders each side best→worst,
+  so no extra sort). At each level: `fillQty = min(remaining, levelQty)`;
+  `fillPrice = levelPrice × (1 ± marketSlippage)` (+for BUY, − for SELL), rounded to **scale 8,
+  HALF_UP**. Levels with qty ≤ 0 or malformed (< 2 fields) are skipped. Depth requested = 20.
+- VWAP / `avgPrice` on `OrderFilled` = Σ(qty×price)/Σqty over the batch, **scale 18, HALF_UP**.
+
+### Market partial → auto-cancel; rejection rules
+- If depth is exhausted before the order fully fills, we emit the per-fill events plus a final
+  `OrderCancelled` reason=`"MARKET_PARTIAL"` (market orders can't rest). The LAST fill in this
+  case is still marked `isFinalFill=true` (it is the last fill of the order's life).
+- Market order rejected (feed DEGRADED/DISCONNECTED, empty depth, depth fetch failure, or zero
+  fillable levels) → single `OrderCancelled` reason=`"REJECTED"`, no trades.
+- Note: SRS SR-MATCH-ME-001 names the empty-depth reason `DEPTH_EXHAUSTED` / `OrderRejected`;
+  per the phase-3 task contract we use the existing `OrderCancelledEvent` with reason `REJECTED`
+  for ALL market-reject cases (no separate `OrderRejected` event exists in exchange-common).
+
+### Limit order: FIFO distribution + fill-price rule
+- `LimitOrderMatcher` distributes the external trade volume across the eligible FIFO list:
+  `fillQty = min(order.remaining, externalRemaining)`, stop when external volume is exhausted.
+- **Fill price** (DEVIATION from SRS SR-MATCH-ME-002 step 4, which says
+  `price = external_trade.price`): per the phase-3 task contract we use the price more
+  favorable to the resting order — BUY → `min(limitPrice, externalPrice)`,
+  SELL → `max(limitPrice, externalPrice)`. Since `eligibleLimitOrders` only returns orders whose
+  limit already satisfies the touch condition, this differs from `externalPrice` only when the
+  resting limit is strictly better, in which case the resting order keeps its better price.
+  Flagged for back-port review.
+- On fill: `order.addFill(qty)`; if fully filled → `openOrdersIndex.remove(orderId)` +
+  `OrderFilled`, else `OrderPartiallyFilled`. `isFinalFill` on the trade event = order fully
+  filled.
+
+### Fee rules (all fills TAKER in MVP)
+- BUY  → `feeAmount = quantity × takerRate`, `feeAsset = baseAsset`.
+- SELL → `feeAmount = quantity × price × takerRate`, `feeAsset = quoteAsset`.
+- `role` is always `"TAKER"` (SR-MATCH-ME-003: maker/taker not tracked per-order in MVP and
+  rates are equal). Fee rounded to scale 8, HALF_UP.
+
+### residualFrozenAmount = 0 / residualAsset = null — Order owns residual
+- The matching engine does NOT compute the placement-time freeze, so EVERY `TradeExecuted`
+  event sets `residualFrozenAmount = BigDecimal.ZERO` and `residualAsset = null`. Wallet skips
+  residual release when the amount is 0; the Order service releases any residual freeze itself
+  on terminal (a separate Order-side phase). Matching never tries to release freeze.
+- `isFinalFill = true` only on the fill that completes the order (or the last fill of a market
+  order before auto-cancel), else false — so Wallet knows when an order is done.
+
+### `quoteQuantity` and Trade row
+- `quoteQuantity = quantity × fillPrice` (the FILL price, not slippage-of-slippage), scale 8.
+  Persisted to the `Trade.quote_amount` column and sent on the event as `quoteQuantity`.
+- Limit fills carry `externalTradeId = null` for now (the index/match path doesn't thread the
+  external trade id through yet); market fills are also null. Column is nullable.
+
+### Atomicity: one transaction per order's fill batch (`FillEmitter`)
+- `FillEmitter` is a `@Component` with `@Transactional` methods. For ONE order's batch it saves
+  all `Trade` rows + enqueues all `TradeExecuted` events + enqueues the lifecycle event
+  (`OrderFilled`/`OrderPartiallyFilled`/`OrderCancelled`) through `MatchingOutboxPublisher` in a
+  single transaction → atomic with the outbox (all land or none).
+- A market order = one batch = one transaction. A single external trade touching N limit orders
+  = N independent per-order transactions (simpler; acceptable per task contract — each order is
+  its own atomic unit).
+- `MatchingOutboxPublisher.enqueue` is `Propagation.MANDATORY`, so it requires the caller's
+  transaction; `FillEmitter`'s `@Transactional` boundary supplies it. The matchers (which run on
+  the per-pair executor) call `FillEmitter` AFTER finishing the in-memory walk/distribution, so
+  index mutation stays single-threaded and DB work happens inside the transaction.
+
+### Pair metadata lookup + cache (`MarketDataClient.getPairMetadata`)
+- Added `getPairMetadata(pair)` → GET `/internal/pairs/{pair}/metadata` (snake_case record:
+  base_asset, quote_asset, tick_size, step_size, min_notional). Results cached in a
+  `ConcurrentHashMap` (static reference data) to avoid a per-fill HTTP call.
+- Graceful fallback: on call failure/empty, log a WARN and derive metadata from the symbol
+  (quote = `USDT`, base = symbol minus the `USDT` suffix) so fee/trade-event resolution never
+  blocks a fill. Used to resolve baseAsset/quoteAsset for fees + the trade event.

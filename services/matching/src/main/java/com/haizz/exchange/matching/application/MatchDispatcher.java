@@ -49,7 +49,6 @@ public class MatchDispatcher {
         log.debug("External trade pair={} price={} qty={} buyerIsMaker={} -> {} eligible {} order(s)",
                 pair, price, qty, buyerIsMaker, eligible.size(), candidateSide);
 
-        // TODO(phase3): perform the actual fills and emit trades; for now hand off to the hook.
         limitMatchHook.onMatch(pair, price, qty, buyerIsMaker, eligible);
     }
 }

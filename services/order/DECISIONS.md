@@ -275,3 +275,63 @@ official docs (SRS / System Design / API_SPEC) as appropriate.
   `mvn -pl services/order -am test` is green without Docker. Verified examples: BUY 0.1 BTC @55000
   LIMIT taker 0.001 → 5505.5 quote; SELL 0.05 BTC → 0.05 base; VWAP of (0.04@55000, 0.06@56000) =
   55600; CANCEL_REQUESTED + completing fill → FILLED.
+
+## Phase 6 — Matching-events fill consumer (SR-042)
+
+### Residual frozen balance is OWNED by the Order service (not Wallet)
+- The Matching Engine sets `residualFrozenAmount=0` on trade events, so the Wallet does NOT release
+  the leftover freeze per fill. Per fill the Wallet only debits the consumed frozen portion (BUY:
+  `fillQty × fillPrice` from quote-frozen; SELL: `fillQty` from base-frozen) and credits available
+  minus fee. The Order service therefore owns release of the leftover freeze when an order reaches a
+  TERMINAL state, because it is the only party that still knows the original `freezeAmount`.
+- Residual formulas (consumed from the order's own filled portion):
+  - **BUY**: `consumedQuote = filledQuantity × avgFillPrice (VWAP)`; `residual = freezeAmount − consumedQuote`
+    (freezeAsset = quote). The slippage+taker buffer baked into the BUY freeze is released here.
+  - **SELL**: `consumedBase = filledQuantity`; `residual = freezeAmount − filledQuantity`
+    (freezeAsset = base; = 0 on a full fill, so no spurious unfreeze).
+  - For a REJECTED / market-auto-cancel with 0 fills, consumed = 0 → the FULL `freezeAmount` is released.
+- Residual is rounded **DOWN to 8 dp** and **clamped to ≥ 0** (never over-release; never negative on a
+  pathological over-consumed input). A residual of 0 skips the unfreeze call entirely.
+
+### Distinct unfreeze reason to guard against double-release
+- The matching-driven release uses reason **`"FILL_RESIDUAL"`**, DISTINCT from the user-initiated
+  DELETE path's `"CANCELLED"` (`CancelOrderUseCase.CANCELLED_REASON`). Wallet `unfreeze` is idempotent
+  by `(referenceId=orderId, reason)`, so using a different reason means the matching residual release
+  and the user-cancel release occupy separate idempotency keys and cannot silently cancel each other.
+- Additional guard: `FillPersister` only releases when the persist actually transitioned the order
+  (outcome `APPLIED`). If the order is already terminal (e.g. the user DELETE already set
+  CANCEL_REQUESTED and the engine then confirms CANCELLED, or a duplicate event) the persister returns
+  `SKIPPED` and NO unfreeze is attempted. So the two paths release at most once each, for their own
+  distinct portions, and replays are no-ops.
+
+### Cumulative→delta idempotency
+- Matching `OrderPartiallyFilledEvent.filledQuantity` and `OrderFilledEvent.filledQuantity` are
+  CUMULATIVE, but `Order.applyFill` takes a DELTA. The conversion `delta = eventCumulative −
+  order.filledQuantity` is done **inside the `@Transactional` persister, under the pessimistic
+  write-lock**, where the current filled quantity is authoritative. A `delta <= 0` is treated as an
+  idempotent replay / superseded out-of-order event and is SKIPPED (no mutation, no save). `onFilled`
+  applies the remaining delta to drive the state to FILLED; if already FILLED it is a no-op.
+
+### Order-missing tolerance (MVP)
+- A fill/cancel event may arrive before the local order row is visible (event ordering vs. the
+  place-order commit). `FillPersister` returns `MISSING` and the use case logs a WARN and skips —
+  acceptable for the MVP. (A future hardening could DLQ/retry the event.) MISSING never triggers an
+  unfreeze.
+
+### Transaction boundary & post-commit unfreeze (mirrors CancelOrderUseCase)
+- New `application/FillPersister` `@Component` holds the three `@Transactional` methods
+  (`applyPartial` / `complete` / `cancel`) that load (pessimistic lock) → mutate → save, returning an
+  immutable `FillResult` snapshot (outcome + userId/side/freezeAmount/freezeAsset/filledQuantity/
+  avgFillPrice) captured as values so it is safe to read after the tx commits. `ProcessFillEventUseCase`
+  performs the wallet `unfreeze` **AFTER** the persist commits — same persist-then-unfreeze ordering as
+  cancel, so funds are never released for a state we failed to record. Separate bean so the
+  `@Transactional` proxy applies (self-invocation would bypass it). On unfreeze failure the state is
+  already persisted; we log for reconciliation (idempotent retry is safe).
+
+### Tests
+- 20 new pure-unit tests (Mockito, no Spring/Docker): `FillPersisterTest` (8 — delta conversion,
+  replay/terminal/missing skips, complete→FILLED idempotency, cancel transition+terminal guard) and
+  `ProcessFillEventUseCaseTest` (12 — partial passes cumulative & never unfreezes, FILLED BUY residual
+  = freeze−filled×avg verified via Mockito captor (5505.5−5500=5.5), SELL full fill → residual 0 → no
+  unfreeze, REJECTED 0-fill releases full freeze, MARKET_PARTIAL releases freeze−consumed BUY & SELL,
+  terminal-skip → no unfreeze, residual never negative, rounds DOWN 8dp). Total order module: 51 tests.

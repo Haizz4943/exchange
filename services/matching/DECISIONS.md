@@ -53,3 +53,72 @@ API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 ### docker-compose left untouched
 - `docker-compose.yml` defines infra only (app services are commented out); per repo convention
   app services run via `start-all.ps1`. No `matching` service added to compose.
+
+## Phase 2 — Consumers, index, startup rebuild, feed status (SR-050)
+
+### Per-pair single-threaded execution model
+- `PairExecutorRegistry` (`infrastructure/index`) lazily creates ONE single-thread
+  `ExecutorService` per pair (`ConcurrentHashMap<String, ExecutorService>`), named
+  `pair-<symbol>-N`, daemon threads. `submit(pair, task)` serializes all work for a pair into
+  a deterministic FIFO sequence. This is the ONLY safe entry point for index mutation + matching
+  per pair — it's what lets `OpenOrdersIndex` stay non-concurrent. Task exceptions are caught so
+  a single bad task never kills the pair's worker thread. `@PreDestroy` shuts executors down
+  (5s graceful, then `shutdownNow`).
+- Both consumers wrap their dispatch in `pairExecutorRegistry.submit(pair, ...)` rather than
+  calling dispatchers directly. Feed-status updates (degraded/recovered) bypass the executor
+  since `FeedStatusRegistry` is already thread-safe and order-insensitive.
+
+### Event routing: two-pass JSON deserialize
+- Consumers first deserialize `EventEnvelope<Object>` to peek `eventType`, then re-deserialize
+  with the concrete payload `TypeReference`. Chose clarity over a single custom deserializer;
+  cost is one extra parse per record, acceptable for this throughput. Unknown eventTypes
+  (e.g. `PairMetadataUpdatedEvent`, `DepthUpdatedEvent`) are logged at debug and ignored.
+  All processing is wrapped in try/catch so a poison message never crashes the listener.
+- Market-data eventType matching uses the full class-style names confirmed from the producer
+  (`ExternalTradeObservedEvent`, `MarketDataFeedDegradedEvent`, `MarketDataFeedRecoveredEvent`),
+  whereas order events use short names (`OrderPlaced`, `OrderCancelled`) — mirrors each
+  producer's actual `eventType` string.
+
+### Consumer groupId
+- Both listeners use groupId `matching-engine` and rely on the shared
+  `kafkaListenerContainerFactory` (manual ack, RECORD ack mode) from `KafkaConfig`.
+
+### Aggressing-side inference for external trades
+- `MatchDispatcher.onExternalTrade` infers which resting side is eligible from `buyerIsMaker`:
+  if the external BUYER is the maker, the external taker was a SELLER hitting bids → OUR resting
+  BUY limit orders are candidates; otherwise OUR resting SELL limit orders are candidates.
+- Trades for a pair whose feed is DEGRADED/DISCONNECTED (`FeedStatusRegistry.isTradeable` false)
+  are skipped with a warning — we don't trust the external price while the feed is unhealthy.
+
+### Feed status registry
+- `FeedStatusRegistry` (`domain`) is a thread-safe `ConcurrentHashMap<String, FeedState>` with
+  enum `{HEALTHY, STALE, DEGRADED, DISCONNECTED}` + `lastUpdate`. Unknown pairs default HEALTHY
+  (and therefore tradeable) — fail-open so a pair with no feed event yet isn't blocked. STALE is
+  defined for a later staleness-detector phase but is currently unused/tradeable.
+
+### Eligibility rule (`OpenOrdersIndex.eligibleLimitOrders`)
+- BUY (bid) limit orders eligible when `limitPrice >= externalPrice`; SELL (ask) limit orders
+  eligible when `limitPrice <= externalPrice`. Implemented by iterating the relevant side's
+  per-price `TreeMap`, collecting orders that meet the price condition, then sorting the whole
+  eligible set by `createdAt` ascending (FIFO fairness across the set, per spec). Correctness
+  over micro-optimization for now. MARKET ResidentOrders never rest, so they're never returned.
+
+### Hook seams for phase 3
+- `MarketOrderHook` + `LimitMatchHook` interfaces with no-op logging `@Component` impls
+  (`NoOpMarketOrderHook`, `NoOpLimitMatchHook`). Phase 3 implements the real fill / trade-emission
+  logic by replacing these beans — no rewiring of consumers/dispatchers needed. Dispatcher bodies
+  carry `// TODO(phase3)` markers where fills go.
+- `OrderDispatcher.onOrderPlaced`: MARKET → `marketOrderHook.handle(ro)` (NOT indexed —
+  executes immediately in phase 3); LIMIT → `openOrdersIndex.add(ro)`.
+
+### Startup rebuild + resilience
+- `IndexRebuildService` listens for `ApplicationReadyEvent` and pages
+  `OrderClient.fetchOpenOrders(page, 200)` from page 0 until an empty/short page or last page,
+  building a `ResidentOrder` per LIMIT order and adding to the index. Non-LIMIT (MARKET) rows are
+  skipped defensively (shouldn't be resting).
+- Idempotent: each order is `remove`d before `add`, so a re-run rebuilds cleanly without dupes.
+- Resilient: the whole loop is wrapped in try/catch — if the Order service is unreachable the app
+  logs a WARN and boots in a DEGRADED state (live Kafka events still processed) rather than
+  crashing. A retry/reconnect is left as a TODO.
+- Rebuild mutates the index directly (single rebuild thread, before live event traffic matters);
+  once consumers are driving events all further mutation goes through the per-pair executor.

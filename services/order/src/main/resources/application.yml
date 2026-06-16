@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/order_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+
+server:
+  port: 8083
+
+logging:
+  level:
+    com.haizz.exchange.order: INFO
+
+order:
+  jwt:
+    algorithm: ${JWT_ALGORITHM:HS256}
+    secret: ${JWT_SECRET:change-me-in-prod-must-be-at-least-32-chars!}
+  kafka:
+    order-events-topic: orders.events.v1
+    matching-events-topic: matching.events.v1
+  outbox:
+    relay-fixed-delay-ms: 100
+    relay-batch-size: 100
+  clients:
+    wallet-base-url: ${WALLET_BASE_URL:http://localhost:8082}
+    marketdata-base-url: ${MARKETDATA_BASE_URL:http://localhost:8085}
+  fees:
+    taker-rate: 0.001
+  limits:
+    max-open-orders-per-pair: 100

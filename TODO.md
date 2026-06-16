@@ -12,7 +12,7 @@
 | Market Data | 8085 | 🟡 Gần xong | Code đủ tính năng, **thiếu test thật** |
 | Frontend | 3000 | 🟡 Scaffold | Auth/Wallet/Chart/OrderBook/TradesTape wired qua Gateway; OrderForm-submit + khớp lệnh còn stub (chờ Order/Matching) |
 | Order | 8083 | ⬜ Chưa làm | Chưa có thư mục service (Gateway đã để sẵn route → 503) |
-| Matching Engine | 8084 | ⬜ Chưa làm | Chưa có thư mục service (Gateway đã để sẵn route + mapping WS) |
+| Matching Engine | 8084 | 🟡 Gần xong | Walk-the-book + slippage + VWAP, limit FIFO khớp khi external trade chạm, `Trade`/`TradeExecuted` + fee taker 0.10%, pause/reject khi feed degraded; có unit test (50 test). Residual freeze do Order release khi terminal; limit fill dùng better-of-price (xem DECISIONS). Còn thiếu integration test thật (Kafka/Postgres) |
 | API + WS Gateway | 8080 | ✅ Xong | HS256 dev; route+JWT+rate-limit+WS fan-out; build xanh, 13 unit test. live-balance còn nửa-stub (wallet phát delta) |
 | Hạ tầng (Docker) | — | ✅ Xong | postgres, timescale, redis, kafka |
 
@@ -52,17 +52,21 @@
 - [ ] Read endpoint orders (filter status/pair/date) (SR-041)
 - [ ] Order state machine + ack < 500ms p95 (SR-042)
 
-## 3.4 Matching Engine (Simulation) — ⬜ (chưa bắt đầu)
+## 3.4 Matching Engine (Simulation) — 🟡 (gần xong, còn integration test)
 
-- [ ] Match theo Binance data (không P2P) (SR-050)
-- [ ] Market fill tại best bid/ask + slippage 0.05% (SR-051)
-- [ ] Walk-the-book + VWAP khi vượt depth (SR-052)
-- [ ] Limit eligible khi lastPrice chạm limit (SR-053)
-- [ ] Partial fill theo volume external, cửa sổ 5s (SR-054)
-- [ ] Tạo `Trade` record mỗi fill (SR-055)
-- [ ] Publish `TradeExecuted` (SR-056)
-- [ ] Tính fee taker/maker 0.10% + đúng asset (SR-057, SR-058)
-- [ ] Pause matching khi feed mất >30s, reject market order (SR-059)
+- [x] ✅ Match theo Binance data (không P2P) (SR-050)
+- [x] ✅ Market fill tại best bid/ask + slippage 0.05% (SR-051)
+- [x] ✅ Walk-the-book + VWAP khi vượt depth (SR-052)
+- [x] ✅ Limit eligible khi lastPrice chạm limit (SR-053)
+- [x] ✅ Partial fill theo volume external (FIFO across eligible) (SR-054)
+- [x] ✅ Tạo `Trade` record mỗi fill (SR-055)
+- [x] ✅ Publish `TradeExecuted` (SR-056)
+- [x] ✅ Tính fee taker 0.10% + đúng asset (BUY→base, SELL→quote) (SR-057, SR-058)
+- [x] ✅ Pause matching + reject market order khi feed degraded (SR-059)
+- [x] ✅ Unit test thuần (50 test: walk-the-book/VWAP/slippage, limit FIFO + better-of-price, fee asset, residual=0, degraded reject, index, controller)
+- [x] ✅ `GET /api/v1/trades` (đọc trade của user, phân trang snake_case, JWT) — qua Gateway
+- [ ] ⬜ Integration test thật (Kafka/Postgres Testcontainers, outbox relay end-to-end) — chưa viết
+- [ ] 🟡 Maker/taker tracking thật (MVP luôn TAKER, rate bằng nhau) — post-MVP
 
 ## 3.5 Market Data — 🟡 (gần xong)
 
@@ -117,7 +121,7 @@ Thứ tự đề xuất (mỗi mục mở khoá mục sau):
 
 1. ✅ **API + WS Gateway** — gom REST + real-time. FE chạy được auth + wallet + chart + orderbook + tradestape qua `:8080`.
 2. ⬜ **Order Service** — đặt/hủy lệnh, freeze qua Wallet (đã sẵn sàng nhận). Gateway đã để sẵn route.
-3. ⬜ **Matching Engine** — fill theo Market Data (đã sẵn sàng cấp data) → `TradeExecuted` → Wallet/Order cập nhật. Gateway đã chừa mapping WS `matching.events.v1` → channel `orders`.
+3. 🟡 **Matching Engine** — fill theo Market Data → `TradeExecuted` → Wallet/Order cập nhật. Core matching + unit test xong; còn integration test thật. Gateway đã chừa mapping WS `matching.events.v1` → channel `orders`.
 4. 🟡 Hoàn thiện FE (bỏ stub OrderForm-submit + thông báo khớp lệnh) sau khi (2)(3) xong.
 5. 🟡 Back-port wallet event để live-balance đủ (absolute balance) + viết integration test cho Gateway.
 6. 🟡 Viết test cho Market Data trước khi coi là "done".

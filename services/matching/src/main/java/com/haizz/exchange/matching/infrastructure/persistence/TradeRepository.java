@@ -12,5 +12,7 @@ public interface TradeRepository extends JpaRepository<Trade, UUID> {
 
     Page<Trade> findByUserId(UUID userId, Pageable pageable);
 
+    Page<Trade> findByUserIdOrderByExecutedAtDesc(UUID userId, Pageable pageable);
+
     List<Trade> findByOrderId(UUID orderId);
 }

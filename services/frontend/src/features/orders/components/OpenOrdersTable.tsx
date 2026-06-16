@@ -1,17 +1,23 @@
 'use client';
 
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ordersApi } from '@/lib/api/endpoints/orders';
 import { useAuthContext } from '@/lib/auth/AuthContext';
+import { useToast } from '@/components/ui/Toast';
 import { Table } from '@/components/ui/Table';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { ApiError } from '@/lib/api/errors';
 import { formatPrice, formatQuantity } from '@/lib/utils/bigNumber';
 import { formatDateTime, orderStateLabel } from '@/lib/utils/format';
 import type { OrderResponse } from '@/lib/api/endpoints/orders';
 
+const CANCELLABLE_STATES = ['NEW', 'OPEN', 'PARTIALLY_FILLED'];
+
 export function OpenOrdersTable() {
   const { apiClient } = useAuthContext();
+  const queryClient = useQueryClient();
+  const { push } = useToast();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['orders', 'list', { state: 'NEW,OPEN,PARTIALLY_FILLED' }],
@@ -19,6 +25,21 @@ export function OpenOrdersTable() {
       ordersApi(apiClient).list({ state: 'NEW,OPEN,PARTIALLY_FILLED', size: 50 }),
     staleTime: 30_000,
     retry: 1,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (orderId: string) => ordersApi(apiClient).cancel(orderId),
+    onSuccess: () => {
+      push({ message: 'Đã gửi yêu cầu hủy lệnh', variant: 'success' });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['wallets'] });
+    },
+    onError: (err: unknown) => {
+      push({
+        message: err instanceof ApiError ? err.userMessage : 'Hủy lệnh thất bại',
+        variant: 'error',
+      });
+    },
   });
 
   const columns = [
@@ -65,6 +86,28 @@ export function OpenOrdersTable() {
       key: 'created',
       header: 'Time',
       render: (r: OrderResponse) => formatDateTime(r.created_at),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right' as const,
+      render: (r: OrderResponse) => {
+        if (!CANCELLABLE_STATES.includes(r.state)) {
+          return <span className="hx-text-gray-300 dark:hx-text-gray-600">—</span>;
+        }
+        const isCancelling =
+          cancelMutation.isPending && cancelMutation.variables === r.order_id;
+        return (
+          <button
+            type="button"
+            onClick={() => cancelMutation.mutate(r.order_id)}
+            disabled={isCancelling}
+            className="hx-text-red-600 dark:hx-text-red-400 hover:hx-text-red-700 hx-text-xs hx-font-medium disabled:hx-opacity-50 disabled:hx-cursor-not-allowed"
+          >
+            {isCancelling ? 'Đang hủy...' : 'Hủy'}
+          </button>
+        );
+      },
     },
   ];
 

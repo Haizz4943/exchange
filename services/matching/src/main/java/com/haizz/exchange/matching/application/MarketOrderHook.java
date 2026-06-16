@@ -5,9 +5,8 @@ import com.haizz.exchange.matching.domain.ResidentOrder;
 /**
  * Seam for executing an incoming MARKET order against the book / external price.
  *
- * <p>Phase 2 wires a no-op logging implementation ({@link NoOpMarketOrderHook}).
- * Phase 3 replaces it with the real immediate-execution logic (market orders never
- * rest in the index — they fill on arrival).
+ * <p>Implemented by {@code MarketOrderMatcher}: market orders never rest in the index —
+ * they fill immediately on arrival by walking the external depth.
  */
 public interface MarketOrderHook {
 

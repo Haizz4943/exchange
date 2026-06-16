@@ -8,8 +8,8 @@ import java.util.List;
 /**
  * Seam for matching resting LIMIT orders against an observed external trade.
  *
- * <p>Phase 2 wires a no-op logging implementation ({@link NoOpLimitMatchHook}).
- * Phase 3 replaces it with the real fill / trade-emission / fee logic.
+ * <p>Implemented by {@code LimitOrderMatcher}: distributes the external trade volume across
+ * the eligible resting orders FIFO, persisting trades and emitting fill/fee events.
  */
 public interface LimitMatchHook {
 

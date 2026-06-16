@@ -4,9 +4,15 @@ import React from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
+import { useToast } from '@/components/ui/Toast';
+import { useAuthContext } from '@/lib/auth/AuthContext';
+import { ordersApi, type PlaceOrderRequest } from '@/lib/api/endpoints/orders';
+import { ApiError } from '@/lib/api/errors';
+import { generateCorrelationId } from '@/lib/utils/correlationId';
 
 export interface OrderFormProps {
   pair: string;
@@ -30,11 +36,16 @@ const orderSchema = z
 type OrderFormData = z.infer<typeof orderSchema>;
 
 export function OrderForm({ pair, side: defaultSide = 'BUY' }: OrderFormProps) {
+  const { apiClient } = useAuthContext();
+  const queryClient = useQueryClient();
+  const { push } = useToast();
+
   const {
     register,
     control,
     watch,
     handleSubmit,
+    reset,
     formState: { errors },
   } = useForm<OrderFormData>({
     resolver: zodResolver(orderSchema),
@@ -43,19 +54,49 @@ export function OrderForm({ pair, side: defaultSide = 'BUY' }: OrderFormProps) {
 
   const orderType = watch('type');
 
+  const base = pair.replace('USDT', '');
+
+  const mutation = useMutation({
+    mutationFn: (req: PlaceOrderRequest) => ordersApi(apiClient).place(req),
+    onSuccess: (_data, req) => {
+      push({
+        message: `Đã đặt lệnh ${req.side} ${req.quantity} ${base}`,
+        variant: 'success',
+      });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['wallets'] });
+      // Keep side/type, clear the entered amounts.
+      reset({ type: req.type, side: req.side, quantity: '', limitPrice: '' });
+    },
+    onError: (err: unknown) => {
+      const message =
+        err instanceof ApiError
+          ? err.userMessage
+          : err instanceof Error
+            ? err.message
+            : 'Đặt lệnh thất bại';
+      push({ message, variant: 'error' });
+    },
+  });
+
   const onSubmit = (data: OrderFormData) => {
-    // STUB: Order Service not yet available
-    console.warn('[OrderForm] Order placement stubbed — Order Service not deployed yet:', data);
-    alert('Order placement requires the Order Service (not yet available). See docs for status.');
+    const req: PlaceOrderRequest = {
+      client_order_id: generateCorrelationId(),
+      pair,
+      side: data.side,
+      type: data.type,
+      quantity: data.quantity,
+      time_in_force: 'GTC',
+      // Only send limit_price for LIMIT orders — backend rejects it for MARKET.
+      ...(data.type === 'LIMIT' ? { limit_price: data.limitPrice } : {}),
+    };
+    mutation.mutate(req);
   };
 
-  return (
-    <div className="hx-p-3 hx-border hx-border-amber-200 dark:hx-border-amber-800 hx-rounded hx-bg-amber-50 dark:hx-bg-amber-900/10 hx-mb-3">
-      <p className="hx-text-xs hx-text-amber-600 dark:hx-text-amber-400 hx-mb-3">
-        Order placement requires the Order Service (not yet deployed). Form is wired and validated
-        but submit is disabled.
-      </p>
+  const side = watch('side');
 
+  return (
+    <div className="hx-p-3">
       <form onSubmit={handleSubmit(onSubmit)} className="hx-flex hx-flex-col hx-gap-3">
         <Controller
           name="side"
@@ -111,7 +152,7 @@ export function OrderForm({ pair, side: defaultSide = 'BUY' }: OrderFormProps) {
         )}
 
         <Input
-          label={`Quantity (${pair.replace('USDT', '')})`}
+          label={`Quantity (${base})`}
           type="number"
           step="0.00001"
           min="0"
@@ -120,8 +161,13 @@ export function OrderForm({ pair, side: defaultSide = 'BUY' }: OrderFormProps) {
           {...register('quantity')}
         />
 
-        <Button type="submit" variant="primary" className="hx-w-full" disabled>
-          Place order (unavailable)
+        <Button
+          type="submit"
+          variant="primary"
+          className="hx-w-full"
+          disabled={mutation.isPending}
+        >
+          {mutation.isPending ? 'Đang đặt...' : `Đặt lệnh ${side}`}
         </Button>
       </form>
     </div>

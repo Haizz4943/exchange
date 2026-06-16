@@ -211,3 +211,67 @@ official docs (SRS / System Design / API_SPEC) as appropriate.
 - `GET /api/v1/orders/{orderId}`: missing → 404 (`ORDER_NOT_FOUND`); owned by another user → 403
   (`FORBIDDEN`). Existence is not masked as 404 for non-owners, consistent with the Phase 3 cancel
   decision. Read use cases are `@Transactional(readOnly = true)`.
+
+## Phase 5 — State machine hardening + matching consumer stub + tests (SR-042)
+
+### State machine — guarded transitions on `Order`
+- The `markCancelRequested()` stub was replaced with a full set of guarded, pure-domain transition
+  methods (no Spring): `applyFill(fillQty, fillPrice)`, `markOpen()`, `markCancelRequested()`,
+  `markCancelled()`, `markRejected(reason)`. Each rejects an illegal transition with
+  `IllegalStateException` (wrong state) or `IllegalArgumentException` (bad fill args) — kept as
+  unchecked JDK exceptions because these are programmer/engine-contract errors, not user-facing
+  API validation; the consumer that drives them will catch + log (fail-soft) per the wallet pattern.
+- `markOpen()` is idempotent on OPEN (NEW → OPEN); any other source state throws.
+- `markRejected` is only valid from NEW (admission failure), and sets `rejectionReason`.
+- `markCancelRequested` now actually enforces `isCancellable()` (previously unconditional). The
+  existing cancel flow (`CancelOrderPersister`) already checks `isCancellable()` before calling it,
+  so runtime behaviour is unchanged; the guard is now defence-in-depth.
+
+### Terminal precedence — FILLED wins over a pending cancel (SRS Appendix)
+- `applyFill` accepts a fill from NEW / OPEN / PARTIALLY_FILLED **and CANCEL_REQUESTED**. If a fill
+  arriving while CANCEL_REQUESTED completes the order it transitions to terminal `FILLED`; a
+  non-completing fill goes to `PARTIALLY_FILLED` (the cancel is then resolved later by the engine).
+  This encodes the rule that a completing fill takes precedence over an in-flight cancel.
+
+### VWAP scale / rounding
+- `avgFillPrice` is recomputed as the running VWAP
+  `((avgFillPrice×prevFilled) + fillPrice×fillQty) / (prevFilled+fillQty)`, divided with
+  `RoundingMode.HALF_UP` at **scale 18** (constant `Order.AVG_PRICE_SCALE`), matching the
+  `avg_fill_price` column precision (scale 18). `applyFill` rejects overfills
+  (cumulative filled > quantity) and non-positive fillQty / negative fillPrice.
+
+### Matching-events consumer — intentional STUB
+- Added `infrastructure/kafka/OrderEventConsumer` (`@KafkaListener` on
+  `${order.kafka.matching-events-topic:matching.events.v1}`, groupId `order-service`) mirroring the
+  wallet `WalletEventConsumer`: deserialize the `com.haizz.exchange.common.event.EventEnvelope`,
+  switch on `eventType` (`OrderPartiallyFilled` / `OrderFilled` / `OrderCancelled`), catch+log any
+  failure so a poison message never crashes the listener.
+- Handlers delegate to a new `application/ProcessFillEventUseCase` skeleton whose bodies **log +
+  `// TODO(matching)`** and do NOT mutate orders yet. Rationale: the Matching Engine is not built,
+  so the concrete event shapes and the freeze-reconciliation contract are not finalised. The point
+  of this phase is that the wiring exists and the app boots a consumer that no-ops cleanly when no
+  events arrive. When the engine lands, each handler must, in one transaction: load the order with
+  a write lock → `applyFill(...)` / `markCancelled()` → persist → release residual frozen balance.
+- **Event-shape / topic ambiguity (noted for back-port):** the wallet service consumes a
+  single-sided `TradeExecuted` on topic `trade.executed` (balance settlement), whereas
+  `matching.events.v1` carries order-lifecycle events (`OrderPartiallyFilled` / `OrderFilled` /
+  `OrderCancelled`) primarily for the gateway → FE. It is not yet decided whether the order service
+  should drive fills off `matching.events.v1` (lifecycle) or a dedicated fill/trade stream. The
+  stub consumes the common `event.order.*` records on `matching.events.v1` as the working
+  assumption; revisit when the engine's event catalogue is finalised.
+
+### Testability refactors (behaviour-preserving)
+- Extracted the freeze formula into `domain/FreezeCalculator` (pure static `compute(...)` returning
+  a `Freeze(amount, asset)` record) and the SR-033 admission rules into `domain/OrderValidator`
+  (pure static `validatePriceRules` / `validateQuantity` / `validateLimitPrice` /
+  `validateMinNotional` / `isMultipleOf`). `PlaceOrderUseCase` now delegates to both — the constants
+  (`MARKET_SLIPPAGE=0.0005`, `QUOTE_FREEZE_SCALE=8`) and every formula/branch are byte-for-byte the
+  same, so place behaviour is unchanged; the extraction exists purely so the logic is unit-testable
+  without a Spring context or Docker.
+
+### Tests — pure unit, no Spring / no Docker
+- 31 tests under `src/test/java/.../domain`: `OrderStateMachineTest` (15), `FreezeCalculatorTest`
+  (5), `OrderValidatorTest` (11). No `@SpringBootTest` / Testcontainers added, so
+  `mvn -pl services/order -am test` is green without Docker. Verified examples: BUY 0.1 BTC @55000
+  LIMIT taker 0.001 → 5505.5 quote; SELL 0.05 BTC → 0.05 base; VWAP of (0.04@55000, 0.06@56000) =
+  55600; CANCEL_REQUESTED + completing fill → FILLED.

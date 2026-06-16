@@ -5,8 +5,10 @@ import com.haizz.exchange.common.enums.OrderType;
 import com.haizz.exchange.order.api.dto.OrderResponse;
 import com.haizz.exchange.order.api.dto.PlaceOrderRequest;
 import com.haizz.exchange.order.config.AppProperties;
+import com.haizz.exchange.order.domain.FreezeCalculator;
 import com.haizz.exchange.order.domain.Order;
 import com.haizz.exchange.order.domain.OrderState;
+import com.haizz.exchange.order.domain.OrderValidator;
 import com.haizz.exchange.order.domain.TradingPair;
 import com.haizz.exchange.order.domain.exception.DuplicateClientOrderIdException;
 import com.haizz.exchange.order.domain.exception.InvalidOrderException;
@@ -22,7 +24,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -39,10 +40,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class PlaceOrderUseCase {
 
-    /** Slippage buffer for MARKET BUY freeze (so we never under-freeze). */
-    private static final BigDecimal MARKET_SLIPPAGE = new BigDecimal("0.0005");
-    /** Scale for quote-asset freeze amounts (rounded UP). */
-    private static final int QUOTE_FREEZE_SCALE = 8;
     /** Idempotency lookup window for a provided client_order_id. */
     private static final long IDEMPOTENCY_WINDOW_HOURS = 24;
 
@@ -68,29 +65,15 @@ public class PlaceOrderUseCase {
                 ? "GTC" : req.timeInForce().trim().toUpperCase();
 
         // 2. Type rules.
-        if (type == OrderType.LIMIT && limitPrice == null) {
-            throw new InvalidOrderException("LIMIT_PRICE_REQUIRED",
-                    "limit_price is required for LIMIT orders");
-        }
-        if (type == OrderType.MARKET && limitPrice != null) {
-            throw new InvalidOrderException("LIMIT_PRICE_NOT_ALLOWED",
-                    "limit_price must not be provided for MARKET orders");
-        }
+        OrderValidator.validatePriceRules(type, limitPrice);
 
         // 3. Pair must exist and be enabled.
         TradingPair pair = tradingPairRepository.findBySymbolAndEnabledTrue(req.pair())
                 .orElseThrow(() -> new PairNotSupportedException(req.pair()));
 
         // 4. Business validation (SR-033).
-        if (quantity.signum() <= 0 || !isMultipleOf(quantity, pair.getStepSize())) {
-            throw new InvalidOrderException("INVALID_QUANTITY",
-                    "quantity must be a positive multiple of step_size " + pair.getStepSize());
-        }
-        if (type == OrderType.LIMIT
-                && (limitPrice.signum() <= 0 || !isMultipleOf(limitPrice, pair.getTickSize()))) {
-            throw new InvalidOrderException("INVALID_PRICE",
-                    "limit_price must be a positive multiple of tick_size " + pair.getTickSize());
-        }
+        OrderValidator.validateQuantity(quantity, pair.getStepSize());
+        OrderValidator.validateLimitPrice(type, limitPrice, pair.getTickSize());
 
         // Reference price: LIMIT uses limit_price; MARKET uses best_ask.
         BigDecimal bestAsk = null;
@@ -101,12 +84,7 @@ public class PlaceOrderUseCase {
             bestAsk = fetchBestAsk(req.pair());
             notionalPrice = bestAsk;
         }
-        BigDecimal notional = notionalPrice.multiply(quantity);
-        if (notional.compareTo(pair.getMinNotional()) < 0) {
-            throw new InvalidOrderException("BELOW_MIN_NOTIONAL",
-                    "Order notional " + notional.toPlainString()
-                            + " is below min_notional " + pair.getMinNotional());
-        }
+        OrderValidator.validateMinNotional(notionalPrice, quantity, pair.getMinNotional());
 
         // 5. Max open orders per pair (cap).
         long openCount = orderRepository.countByUserIdAndPairAndStateIn(
@@ -131,21 +109,11 @@ public class PlaceOrderUseCase {
 
         // 7. Compute freeze amount (SR-034/035).
         BigDecimal takerRate = appProperties.fees().takerRate();
-        BigDecimal freezeAmount;
-        String freezeAsset;
-        if (side == OrderSide.BUY) {
-            BigDecimal price = type == OrderType.LIMIT ? limitPrice : bestAsk;
-            BigDecimal gross = quantity.multiply(price);
-            if (type == OrderType.MARKET) {
-                gross = gross.multiply(BigDecimal.ONE.add(MARKET_SLIPPAGE));
-            }
-            gross = gross.multiply(BigDecimal.ONE.add(takerRate));
-            freezeAmount = gross.setScale(QUOTE_FREEZE_SCALE, RoundingMode.UP);
-            freezeAsset = pair.getQuoteAsset();
-        } else {
-            freezeAmount = quantity;
-            freezeAsset = pair.getBaseAsset();
-        }
+        FreezeCalculator.Freeze freeze = FreezeCalculator.compute(
+                side, type, quantity, limitPrice, bestAsk, takerRate,
+                pair.getBaseAsset(), pair.getQuoteAsset());
+        BigDecimal freezeAmount = freeze.amount();
+        String freezeAsset = freeze.asset();
 
         // 8. Build the order (so we have an id) then freeze via Wallet.
         Order order = Order.newOrder(userId, req.clientOrderId(), pair.getSymbol(), side, type,
@@ -201,13 +169,5 @@ public class PlaceOrderUseCase {
                     "best_ask unavailable for pair=" + pair);
         }
         return bestAsk;
-    }
-
-    /** True if value is a non-negative integer multiple of step (step > 0). */
-    private boolean isMultipleOf(BigDecimal value, BigDecimal step) {
-        if (step == null || step.signum() <= 0) {
-            return true;
-        }
-        return value.remainder(step).compareTo(BigDecimal.ZERO) == 0;
     }
 }

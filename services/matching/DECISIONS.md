@@ -1,5 +1,7 @@
 # Matching Engine — Implementation Decisions
 
+> Back-ported into docs (API_SPEC §8.2, SRS/SystemDesign Matching appendices) on 2026-06-17.
+
 Per-service log of judgment calls not dictated by the specs (SRS / System Design /
 API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 

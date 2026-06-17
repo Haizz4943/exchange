@@ -1,5 +1,7 @@
 # Order Service — Implementation Decisions
 
+> Back-ported into docs (API_SPEC §3, SRS/SystemDesign Order appendices) on 2026-06-17.
+
 This file records judgment calls made while scaffolding the Order Service (Phase 1)
 that are NOT explicitly dictated by an existing spec. Review and back-port into the
 official docs (SRS / System Design / API_SPEC) as appropriate.

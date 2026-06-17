@@ -401,6 +401,18 @@ given orderPlacedEvent:
     commit
 ```
 
+> **NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** Implemented as designed,
+> with these specifics confirmed: BUY walks `asks`, SELL walks `bids` (depth response already orders
+> each side best→worst, so no re-sort); `fillQty = min(remaining, levelQty)`;
+> `fillPrice = levelPrice × (1 ± marketSlippage)` (`+` BUY, `−` SELL; `marketSlippage = 0.0005`)
+> rounded to **scale 8, HALF_UP**; levels with `qty ≤ 0` or malformed are skipped; **depth requested
+> = 20** levels. `OrderFilled.avgPrice` = **VWAP** = `Σ(qty×price)/Σqty` over the batch, **scale 18,
+> HALF_UP**. The reject/partial outcomes are emitted as **`OrderCancelled`** (`reason="REJECTED"` for
+> zero-fill rejects, `reason="MARKET_PARTIAL"` for depth-exhausted partials) — there is **no
+> `OrderRejected` event** (correct the `emit OrderRejected(...)` lines in the algorithm above
+> accordingly). Fee uses **`RoundingMode.HALF_UP`** at scale 8 (the `§5.4 RoundingMode.DOWN` note is
+> superseded).
+
 **Why apply slippage even though we already walked the book?** Per SRS BRL-006, market orders incur a fixed 0.05% slippage penalty in addition to walk-the-book VWAP. This simulates real-world slippage even when the book looks thin. It's a pedagogical choice (the user observes realistic slippage) and a conservative one from the simulation perspective.
 
 **Example:** MARKET BUY 1 BTC, depth asks = `[{60000: 0.5}, {60001: 0.3}, {60002: 2.0}]`.
@@ -486,7 +498,12 @@ For `OrderPlaced` with `type == MARKET`: delegates to §5.1 instead of indexing.
 
 ### 5.4 Fee Computation (`FeeCalculator`)
 
-Stateless. Reads `feeSchedule.takerRate` (0.0010 for MVP). Treats all fills as Taker for fee (maker/taker distinction not tracked per-order in MVP since rates are equal — but `role` field on `Trade` is still populated for reporting: MARKET → TAKER, LIMIT → MAKER).
+Stateless. Reads `feeSchedule.takerRate` (0.0010 for MVP). Treats all fills as Taker for fee (maker/taker distinction not tracked per-order in MVP since rates are equal).
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** In the implementation the
+> `role` field is **always `"TAKER"`** — for BOTH market and limit fills (not `MARKET → TAKER,
+> LIMIT → MAKER` as written above). Fee results are rounded to **scale 8 using
+> `RoundingMode.HALF_UP`** (not `RoundingMode.DOWN` as stated in the code block below).
 
 ```java
 public Money computeFee(OrderSide side, Quantity fillQty, Price fillPrice,
@@ -546,6 +563,12 @@ Backed by Redis `SADD mie:processed_events:<eventId> NX EX 86400`. `tryMark` ret
 
 Database: `matching_db` (shared Postgres instance).
 
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** The implemented database
+> is named **`match_db`** (not `matching_db`), following the per-service brevity convention
+> (`wallet_db`, `marketdata_db`). Default datasource URL
+> `jdbc:postgresql://localhost:5432/match_db`, overridable via `SPRING_DATASOURCE_URL`. Read every
+> `matching_db` reference in this appendix (incl. §11.1 `application.yml`) as `match_db`.
+
 ### 6.1 Migration Sequence
 
 ```
@@ -596,8 +619,8 @@ CREATE TABLE matching_outbox (
   event_type     VARCHAR(50)     NOT NULL,
   aggregate_type VARCHAR(40)     NOT NULL,          -- 'Order' or 'Trade'
   aggregate_id   VARCHAR(64)     NOT NULL,          -- orderId or tradeId
-  topic          VARCHAR(60)     NOT NULL,          -- 'matching.events.v1'
-  partition_key  VARCHAR(64)     NOT NULL,          -- always order_id for ordering
+  topic          VARCHAR(60)     NOT NULL,          -- (back-ported 2026-06-17) 'matching.events.v1' OR 'trade.executed'; relay reads topic from row
+  partition_key  VARCHAR(64)     NOT NULL,          -- order_id (lifecycle) / aggregate_id (trade)
   envelope_json  JSONB           NOT NULL,
   created_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
   published_at   TIMESTAMPTZ     NULL,
@@ -671,17 +694,45 @@ erDiagram
 
 ### 7.1 Produced Events (via outbox)
 
-All on `matching.events.v1`, partition key `order_id`:
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** The outbox publishes to
+> **TWO topics**, not one:
+> - **`matching.events.v1`** (key `order_id`) — lifecycle events (`OrderFilled` /
+>   `OrderPartiallyFilled` / `OrderCancelled`), consumed by Order Service / Gateway.
+> - **`trade.executed`** — the `TradeExecuted` event, consumed by Wallet Service for settlement.
+>
+> Each `matching_outbox` row stores its **own `topic` column** (and `partition_key`); the relay reads
+> the topic from the row rather than resolving it from `event_type` — so the relay is
+> **topic-agnostic**. Both topics carry the `exchange-common` `EventEnvelope`. There is **no
+> `OrderRejected` event** (see correction below).
 
-| Event | When Published |
-|-------|----------------|
-| `TradeExecuted` | Each fill (many per order possible). Same DB txn as trade INSERT. |
-| `OrderPartiallyFilled` | After fills that leave some remaining. One per consumption cycle. |
-| `OrderFilled` | When `filled_qty == total_qty`. Terminal for the order. |
-| `OrderCancelled` | On cancel request success OR synthetic cancel of leftover market qty. |
-| `OrderRejected` | Market order with degraded feed OR depth exhausted. |
+| Event | Topic | When Published |
+|-------|-------|----------------|
+| `TradeExecuted` | `trade.executed` | Each fill (many per order possible). Same DB txn as trade INSERT. **Single-sided** — see below. |
+| `OrderPartiallyFilled` | `matching.events.v1` | After fills that leave some remaining. One per consumption cycle. |
+| `OrderFilled` | `matching.events.v1` | When `filled_qty == total_qty`. Terminal for the order. |
+| `OrderCancelled` | `matching.events.v1` | On cancel request success, synthetic cancel of leftover market qty (`reason=MARKET_PARTIAL`), or market reject (`reason=REJECTED`). |
+| ~~`OrderRejected`~~ | — | **(back-ported 2026-06-17) Removed — no such event.** Market rejects use `OrderCancelled{reason="REJECTED"}`. |
 
-**Ordering guarantee:** All events for an order share the partition key → they land on the same Kafka partition → consumed in publish order by downstream consumers. This matters because Order Service must see `OrderPartiallyFilled` before `OrderFilled` (or same batch is fine — both idempotent).
+> **⚠️ KEY CONTRACT — `TradeExecuted` is SINGLE-SIDED (back-ported 2026-06-17 from
+> services/matching/DECISIONS.md):** The published event is the **single-sided shape Wallet
+> consumes**, **not** the two-sided maker/taker P2P shape in
+> `exchange-common/event/trade/TradeExecutedEvent`. The simulation has no platform counterparty, so
+> there is no maker/taker pair. Shape:
+> `{tradeId, orderId, userId, pair, baseAsset, quoteAsset, side, price, quantity, quoteQuantity,
+> feeAmount, feeAsset, role, executedAt, isFinalFill, residualFrozenAmount, residualAsset}`.
+> - **`residualFrozenAmount = 0` and `residualAsset = null` on EVERY trade.** The Matching Engine
+>   **never** computes or releases the placement-time freeze; the **Order Service owns residual
+>   release** on terminal (cross-ref: Order appendix Phase-6 settlement decision). Wallet skips
+>   residual release when the amount is `0`.
+> - **`isFinalFill = true`** only on the fill that completes the order (or the last fill of a market
+>   order before auto-cancel), else `false` — lets Wallet know when an order is done.
+> - `quoteQuantity = quantity × fillPrice` (scale 8 HALF_UP). Fee: BUY → `quantity × takerRate` in
+>   `baseAsset`; SELL → `quantity × price × takerRate` in `quoteAsset` (scale 8 HALF_UP). `role`
+>   always `"TAKER"` in MVP.
+
+**Ordering guarantee:** All lifecycle events for an order share the partition key → they land on the
+same Kafka partition → consumed in publish order by downstream consumers. This matters because Order
+Service must see `OrderPartiallyFilled` before `OrderFilled` (or same batch is fine — both idempotent).
 
 ### 7.2 Consumed Events
 
@@ -736,18 +787,28 @@ Who serves `GET /trades?user_id=...` to the FE?
 For MVP, go with **A**. The endpoint:
 
 ```
-GET /api/v1/trades?pair=BTCUSDT&from=...&to=...&page=0&size=50&sort=executed_at,desc
+GET /api/v1/trades?page=0&size=50
 
 Query:
-  user_id is derived from JWT (header X-User-Id injected by Gateway)
-  all queries must filter by user_id — no cross-user reads
+  user_id is derived from the JWT subject; all results filter by it — no cross-user reads
+  results are newest-first (executed_at DESC)
 
 Response:
   200 OK
   { content: [TradeResponse...], page, size, total_elements, total_pages }
 ```
 
-**Authorization:** Unlike Order Service's internal/user endpoints split, Matching Engine mostly has internal-only concerns EXCEPT this one user-facing endpoint. Controller enforces `userIdFromJwt == query.userId` (403 otherwise).
+**Authorization:** Unlike Order Service's internal/user endpoints split, Matching Engine mostly has internal-only concerns EXCEPT this one user-facing endpoint.
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** As implemented
+> (`TradesController`): `userId` comes from **`jwt.getSubject()`** (not an `X-User-Id` header), so
+> there is no `userIdFromJwt == query.userId` check — the query is **always** scoped to the JWT
+> subject. Page size **default 50, clamped to max 200**. Results **newest-first**
+> (`findByUserIdOrderByExecutedAtDesc`). `TradeResponse` and the page wrapper are **snake_case**
+> (`order_id`, `quote_quantity`, `fee_amount`, `executed_at`, `total_elements`, `total_pages`). The
+> `pair`/`from`/`to` filters are **not yet implemented** (only `page`/`size` honored). `SecurityConfig`
+> already authenticates everything outside `/api/v1/matching/internal/**` + `/actuator/**`, and the
+> Gateway already routes `/api/v1/trades/**` → :8084, so no security/routing change was needed.
 
 ---
 
@@ -780,6 +841,15 @@ Phase 3 — Start consumers
 Phase 4 — Ready
   9. /actuator/health transitions to UP.
 ```
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** The implemented rebuild
+> (`IndexRebuildService`) runs on `ApplicationReadyEvent` and **pages**
+> `GET /api/v1/orders/internal/orders` (page 0, size 200, until an empty/short/last page), building a
+> `ResidentOrder` per **LIMIT** order in FIFO order (non-LIMIT rows skipped). It is **idempotent**
+> (each order is `remove`d then `add`ed). It is **resilient, not fail-fast**: if Order Service is
+> unreachable the loop is caught, a WARN is logged, and the app **boots in a DEGRADED state** (live
+> Kafka events still processed) rather than holding readiness DOWN / blocking startup as Phase 2
+> step 4 implies. Retry/reconnect is a TODO.
 
 ### 8.2 Readiness Check
 
@@ -831,6 +901,24 @@ Not MVP. Post-MVP: periodic snapshot of `OpenOrdersIndex` to Redis (or a snapsho
 ### 9.1 The Per-Pair Single-Threaded Executor Pattern
 
 The fundamental concurrency invariant: **all events for a pair are processed serially in arrival order**. Without this, two external trades arriving simultaneously can produce non-deterministic fill ordering (violating FIFO fairness).
+
+> **NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** Implemented as
+> **`PairExecutorRegistry`** (`infrastructure/index`) — one single-thread `ExecutorService` per pair
+> (`ConcurrentHashMap<String, ExecutorService>`, daemon threads `pair-<symbol>-N`). `submit(pair,
+> task)` serializes index mutation **and** matching per pair into a deterministic FIFO sequence; this
+> is the **only** entry point for index work, which is what lets the in-memory `OpenOrdersIndex` stay
+> **non-concurrent**. Both consumers wrap dispatch in `submit(pair, …)`; feed-status updates bypass
+> it (the registry is already thread-safe). Task exceptions are caught so one bad task never kills the
+> pair's worker.
+>
+> - **Eligibility:** BUY resting eligible when `limitPrice ≥ externalPrice`; SELL eligible when
+>   `limitPrice ≤ externalPrice`; the eligible set is matched **FIFO by `createdAt`** across price
+>   levels.
+> - **Aggressing side** is inferred from the external trade's **`buyerIsMaker`** flag: if the
+>   external buyer is the maker, the external taker was a seller hitting bids → OUR resting **BUY**
+>   limits are candidates; otherwise OUR resting **SELL** limits are candidates.
+> - Trades for a pair whose feed is `DEGRADED`/`DISCONNECTED` are **skipped** (we don't trust the
+>   external price while the feed is unhealthy).
 
 Implementation:
 
@@ -896,6 +984,18 @@ OrderInIndexProjection lookup(OrderId id) {
 ```
 
 ### 9.3 DB Transaction Boundaries
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** Atomicity is implemented
+> as **one DB transaction per order's fill batch** via **`FillEmitter`** (a `@Component` with
+> `@Transactional` methods). For ONE order's batch it saves all `Trade` rows + enqueues all
+> `TradeExecuted` events + enqueues the single lifecycle event
+> (`OrderFilled`/`OrderPartiallyFilled`/`OrderCancelled`) through the outbox publisher **in one
+> transaction** → atomic with the outbox (all land or none). A **market order = 1 transaction**; a
+> **single external trade touching N limit orders = N independent per-order transactions** (each
+> order is its own atomic unit). The outbox `enqueue` is `Propagation.MANDATORY`, so it requires the
+> `FillEmitter` transaction. The matchers run the in-memory walk/distribution on the per-pair
+> executor **first**, then call `FillEmitter` — so index mutation stays single-threaded and all DB
+> work happens inside the transaction.
 
 Database writes (trade inserts + outbox writes) happen on the pair's executor thread. Spring's `@Transactional` annotation opens a txn on that thread; JPA session is thread-bound. This works cleanly because there are no shared JPA sessions across threads.
 

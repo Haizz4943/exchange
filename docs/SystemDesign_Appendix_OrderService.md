@@ -270,6 +270,11 @@ Imported, not redefined:
 
 Database: `order_db` (shared Postgres instance). Migrations managed by Flyway in `src/main/resources/db/migration/`.
 
+> **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Confirmed as built — the
+> default datasource URL targets database **`order_db`**
+> (`jdbc:postgresql://localhost:5432/order_db`), mirroring the wallet service's `wallet_db`
+> convention; overridable via `SPRING_DATASOURCE_URL`.
+
 ### 4.1 Migration Sequence
 
 ```
@@ -561,6 +566,16 @@ Called exclusively by Matching Engine at startup. Contract:
 - **Response:** `InternalOrderProjection[]` — a compact projection containing only fields Matching Engine needs (id, user_id, pair, side, type, quantity, limit_price, filled_quantity, created_at). This is a **different DTO** from `OrderResponse` — smaller, purpose-built.
 - **No JWT required** (network trust for MVP, ADR-010). Gateway does NOT proxy `/internal/*`.
 - **Pagination:** Matching Engine iterates until empty page.
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** As built, the path is
+> `GET /api/v1/orders/internal/orders` (gateway-prefixed form, permitted by the `permitAll`
+> matcher `/api/v1/orders/internal/**`), not the bare `/internal/orders`. There is **no user
+> filter** — it returns ALL users' open orders. Default `state = OPEN,PARTIALLY_FILLED`; size
+> default **1000**, max **1000**. Ordering is **FIFO (`createdAt ASC`)** (via
+> `findByStateInOrderByCreatedAtAsc`) to preserve matching priority on book rebuild. The
+> `InternalOrderProjection` fields are **camelCase**
+> (`{id, userId, pair, side, type, quantity, limitPrice, filledQuantity, createdAt}`) with
+> decimals rendered as plain strings — distinct from the snake_case public `OrderResponse`.
 
 ```java
 // InternalController.java
@@ -899,6 +914,22 @@ public CancelResult execute(OrderId orderId, UserId userId) {
 
 Final `CANCELLED` transition happens in `ApplyCancelUseCase` on consuming `OrderCancelled` from Matching Engine.
 
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Cancel uses
+> **persist-then-unfreeze** — the inverse of placement's freeze-then-persist. It persists the
+> `CANCEL_REQUESTED` transition + `OrderCancelRequested` outbox event in **one** DB transaction,
+> then calls `walletClient.unfreeze(...)` **after** the commit (so funds are never released for a
+> cancel that wasn't recorded). The transactional persist lives in a separate
+> `CancelOrderPersister` bean so the `@Transactional` proxy applies. The released amount is the
+> **still-unfilled portion**:
+> `releaseAmount = freezeAmount × (quantity − filledQuantity) / quantity`, `RoundingMode.DOWN`
+> scale 8 (never over-release). If the post-commit unfreeze fails, the order is already
+> `CANCEL_REQUESTED`; the failure is logged for reconciliation — unfreeze is idempotent by
+> `(referenceId = orderId, reason = "CANCELLED")`, so retry cannot double-release.
+>
+> On the **placement** side (§8.1), the freeze `referenceId` is the pre-generated `orderId`, so
+> a freeze that succeeds before a failed persist leaves an **orphan freeze** that is reconciled
+> later — idempotent by `orderId`. No order row or event is produced on the failure path.
+
 ### 8.3 Apply Fill (Consumer-Driven State Update)
 
 `ApplyTradeUseCase.applyPartialFill(OrderPartiallyFilledEvent event)`:
@@ -931,6 +962,36 @@ public void applyFullFill(OrderFilledEvent event) {
 ```
 
 Why retry? Two Matching Engine events might be consumed by two consumer threads for the same order (shouldn't happen with partition key = `order_id`, but if a rebalance occurs mid-processing, optimistic lock catches it).
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md) — RESIDUAL FREEZE IS OWNED
+> BY THE ORDER SERVICE (Phase 6):** This is an architectural settlement decision. The Matching
+> Engine sets `residualFrozenAmount = 0` on its trade events, so the **Wallet does NOT release
+> the leftover freeze** per fill. Per fill, Wallet only **debits the consumed frozen portion**
+> (BUY: `fillQty × fillPrice` from the quote-frozen balance; SELL: `fillQty` from the
+> base-frozen balance) and credits available minus fee. The **Order Service** therefore owns
+> release of the leftover freeze when an order reaches a **TERMINAL** state, because it is the
+> only party that still knows the original `freezeAmount`.
+>
+> Residual formulas (clamped ≥ 0, rounded **DOWN to 8 dp**; a residual of 0 skips the unfreeze
+> call entirely):
+> - **BUY**: `consumedQuote = filledQuantity × avgFillPrice (VWAP)`;
+>   `residual = freezeAmount − consumedQuote` (asset = quote). The slippage + taker buffer baked
+>   into the BUY freeze is released here.
+> - **SELL**: `consumedBase = filledQuantity`; `residual = freezeAmount − filledQuantity`
+>   (asset = base; = 0 on a full fill, so no spurious unfreeze).
+> - **REJECTED / 0-fill** (e.g. market auto-cancel with no fills): consumed = 0 → the **full**
+>   `freezeAmount` is released.
+>
+> The matching-driven release uses unfreeze reason **`"FILL_RESIDUAL"`**, **distinct** from the
+> user-cancel DELETE path's `"CANCELLED"`. Wallet `unfreeze` is idempotent by
+> `(referenceId = orderId, reason)`, so the two release paths occupy separate idempotency keys
+> and cannot silently cancel each other; each releases at most once for its own portion, and
+> replays are no-ops. The fill events carry **cumulative** `filledQuantity`, converted to a delta
+> under the pessimistic write-lock inside the persister (`delta = eventCumulative −
+> order.filledQuantity`; `delta ≤ 0` is an idempotent replay → SKIPPED, no unfreeze). The
+> residual unfreeze is issued **after** the persist commits (persist-then-unfreeze, as for
+> cancel). **Cross-reference:** the matching side of this contract (`residualFrozenAmount = 0` on
+> trade events) is owned by the Matching Engine appendix.
 
 ### 8.4 Reference Data Consumers
 
@@ -1013,6 +1074,14 @@ Implemented in `domain.OrderStateTransition`:
 **Rule:** If an Order is in `CANCEL_REQUESTED` and `OrderFilled` arrives before `OrderCancelled`, the order becomes `FILLED`. The later `OrderCancelled` (if it arrives) is ignored.
 
 Rationale: Matching Engine is authoritative about what actually executed. If a fill completed, the order IS filled — the user's cancellation was racy and lost. The FE shows `FILLED` via the fill push; from the user's perspective, the cancel "didn't take effect fast enough" — which is accurate.
+
+> **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Confirmed as built — a
+> completing fill arriving in `CANCEL_REQUESTED` drives the order to terminal `FILLED` (FILLED
+> wins); a non-completing fill goes to `PARTIALLY_FILLED`. `avgFillPrice` is the running VWAP
+> `((avg×prevFilled) + fillPrice×fillQty) / (prevFilled + fillQty)`, divided with
+> `RoundingMode.HALF_UP` at **scale 18** (matching the `avg_fill_price` column precision).
+> `applyFill` rejects overfills and non-positive fill quantity / negative fill price as
+> unchecked engine-contract errors (caught + logged fail-soft by the consumer).
 
 Implemented via:
 ```java

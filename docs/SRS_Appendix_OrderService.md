@@ -296,6 +296,12 @@ Implementation:
 
 **Implementation:** Unique index on `(user_id, client_order_id)`. On insert conflict, return the existing order's state rather than creating a new one, with HTTP 409 `DUPLICATE_CLIENT_ORDER_ID`.
 
+> **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** As built, the use case
+> looks up an existing order by `(userId, clientOrderId)` within the last **24h** (matched on
+> `created_at`) and rejects with 409 `DUPLICATE_CLIENT_ORDER_ID`; the DB unique index is the
+> ultimate safety net. The optional **60s app-level dedup window** referenced for SR-037 was
+> **not separately implemented** — the 24h lookup subsumes it.
+
 **Acceptance Criteria:**
 - **Given** user submits `POST /orders {client_order_id: "abc-123", ...}` successfully at T0, **when** the same user submits identical payload at T0 + 5 minutes, **then** the response is `409 Conflict` with body including the original `order_id` and state.
 - **Given** a client_order_id was used 25 hours ago, **when** the same ID is submitted again, **then** it is accepted as a new order (24h dedup window).
@@ -308,6 +314,17 @@ Implementation:
 - **Given** an order in state `OPEN`, **when** user cancels, **then** HTTP 200 is returned immediately with state `CANCEL_REQUESTED`, a `OrderCancelRequested` event is published, and the Order row transitions `OPEN → CANCEL_REQUESTED` (intermediate state in the state machine — see §5).
 - **Given** Matching Engine publishes `OrderCancelled` shortly after, **when** Order Service consumes it, **then** state transitions `CANCEL_REQUESTED → CANCELLED` and the final `filled_qty` is written.
 - **Given** a fill occurs between `OrderCancelRequested` and `OrderCancelled` (race condition), **when** both events arrive, **then** the partial fill is applied first (filled_qty updated) and the cancellation records the remaining qty as cancelled. The final state is `CANCELLED` with `filled_qty < quantity`.
+
+> **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Cancel transitions to the
+> intermediate `CANCEL_REQUESTED` (never directly to terminal `CANCELLED`), then unfreezes only
+> the still-unfilled portion:
+> `releaseAmount = freezeAmount × (quantity − filledQuantity) / quantity`, computed with
+> `RoundingMode.DOWN` at scale 8 (never over-release; any sub-unit remainder stays frozen and is
+> reconciled when the terminal `CANCELLED` arrives). The cancel persist (state +
+> `OrderCancelRequested` outbox) and the wallet unfreeze are ordered **persist-then-unfreeze**
+> (one DB tx commits first, unfreeze after commit) — the inverse of placement's
+> freeze-then-persist — so funds are never released for a cancel that wasn't recorded. The
+> unfreeze is idempotent by `(referenceId = orderId, reason = "CANCELLED")`.
 
 ### SR-ORDER-AP-005 — Freeze Amount Computation
 
@@ -336,6 +353,12 @@ freeze_amount = quantity
 freeze_asset  = base_asset (e.g., BTC)
 ```
 Example: SELL 0.05 ETH → freeze = **0.05 ETH**. Fee is deducted from received quote asset at settlement, not pre-frozen.
+
+> **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** `taker_fee_rate = 0.001`
+> and `slippage = 0.0005` are the implemented constants. For MARKET BUY, `best_ask` comes from
+> the Market Data ticker; a null/≤0 best ask yields `MARKET_DATA_UNAVAILABLE` (503). The
+> **quote-asset** freeze amount is rounded to **8 dp using `RoundingMode.UP`** so the order never
+> under-freezes; the SELL freeze (= raw `quantity`) is not re-scaled.
 
 **Acceptance Criteria:**
 - **Given** a BUY LIMIT order for 0.5 BTC @ 58,000 USDT is submitted, **when** the freeze is computed, **then** `freeze_amount = 0.5 × 58000 × 1.001 = 29,029 USDT` is sent to Wallet Service.
@@ -389,6 +412,17 @@ NEW ──→ REJECTED  (only if validation somehow fails post-commit, rare)
 | Any terminal (`FILLED`, `CANCELLED`, `REJECTED`) | Any | ❌ illegal | — |
 
 **Note on `CANCEL_REQUESTED`:** The SRS main doc (§Appendix B) collapses this into `OPEN`/`PARTIALLY_FILLED` for simplicity. In this service's implementation, it is a distinct state to prevent duplicate cancel requests and clarify UI feedback.
+
+> **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** As built, `applyFill`
+> accepts a fill from `NEW` / `OPEN` / `PARTIALLY_FILLED` **and `CANCEL_REQUESTED`**:
+> - **Terminal precedence** — a fill arriving while `CANCEL_REQUESTED` that **completes** the
+>   order transitions to terminal `FILLED` (FILLED wins over the in-flight cancel); a
+>   non-completing fill goes to `PARTIALLY_FILLED` and the cancel resolves later.
+> - **`avg_fill_price`** is the running VWAP
+>   `((avg×prevFilled) + fillPrice×fillQty) / (prevFilled + fillQty)`, divided with
+>   `RoundingMode.HALF_UP` at **scale 18** (matching the `avg_fill_price` column precision).
+>   `applyFill` rejects overfills (cumulative filled > quantity) and non-positive fill quantity /
+>   negative fill price as programmer/engine-contract errors.
 
 ---
 

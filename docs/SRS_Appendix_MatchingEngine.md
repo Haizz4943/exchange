@@ -82,17 +82,26 @@ Every consumed event has an `event_id`. Matching Engine keeps a deduplication ta
 
 ### 3.2 Produced Events
 
-All on topic `matching.events.v1`, partition key `order_id`.
+> **NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** Production spans **TWO**
+> topics. Lifecycle events (`OrderFilled` / `OrderPartiallyFilled` / `OrderCancelled`) go to
+> `matching.events.v1` (key `order_id`, consumed by Order/Gateway); **`TradeExecuted` goes to a
+> separate topic `trade.executed`** (consumed by Wallet for settlement). The outbox row carries its
+> own `topic` column so the relay is topic-agnostic. There is **no `OrderRejected` event** — see the
+> corrected row below and SR-MATCH-ME-001.
+
+Lifecycle events on `matching.events.v1`, partition key `order_id`; `TradeExecuted` on `trade.executed`.
 
 | Event | When | Payload |
 |-------|------|---------|
 | `OrderPartiallyFilled` | After applying a partial fill to an order | `order_id, user_id, filled_qty, remaining_qty, last_fill_price, last_fill_qty, occurred_at` |
 | `OrderFilled` | After applying a fill that brings `filled_qty == quantity` | `order_id, user_id, total_filled_qty, avg_fill_price, occurred_at` |
-| `OrderCancelled` | After processing `OrderCancelRequested` | `order_id, user_id, filled_qty_at_cancel, remaining_qty, cancelled_at` |
-| `OrderRejected` | Rare: depth exhausted for market order with zero fill | `order_id, user_id, reason, occurred_at` |
-| `TradeExecuted` | Per individual fill (may emit multiple per `OrderPartiallyFilled`) | `trade_id, order_id, user_id, pair, side, price, quantity, quote_amount, fee_amount, fee_asset, role, executed_at` |
+| `OrderCancelled` | On `OrderCancelRequested`, **or** market reject (`reason=REJECTED`), **or** market partial auto-cancel (`reason=MARKET_PARTIAL`) | `order_id, user_id, filled_qty_at_cancel, remaining_qty, reason, cancelled_at` |
+| ~~`OrderRejected`~~ | **(back-ported 2026-06-17) Removed — no such event exists.** Market rejects are emitted as `OrderCancelled` with `reason="REJECTED"`. | — |
+| `TradeExecuted` | Per individual fill (may emit multiple per `OrderPartiallyFilled`). **Single-sided**, on topic `trade.executed`. | `trade_id, order_id, user_id, pair, base_asset, quote_asset, side, price, quantity, quote_quantity, fee_amount, fee_asset, role, executed_at, is_final_fill, residual_frozen_amount(=0), residual_asset(=null)` |
 
-**Ordering guarantee:** For a single `order_id`, events are emitted in logical order: `TradeExecuted` (one or more) → `OrderPartiallyFilled` OR `OrderFilled`. Same partition key ensures Kafka preserves this order downstream.
+**Ordering guarantee:** For a single `order_id`, lifecycle events are emitted in logical order:
+`TradeExecuted` (one or more) → `OrderPartiallyFilled` OR `OrderFilled`. Same partition key ensures
+Kafka preserves this order downstream.
 
 ### 3.3 Synchronous Calls (Outgoing)
 
@@ -116,7 +125,20 @@ Inherits and expands SRS §3.4.
    - For SELL: iterate `bids` from best (highest) to worst; consume `min(remaining_qty, level_qty)` at each `level_price × (1 - slippage_rate)`.
 4. Each level consumed produces one `TradeExecuted` event (one fill at one price).
 5. Continue until `remaining_qty == 0` or depth is exhausted.
-6. Emit `OrderFilled` (if fully filled) or `OrderRejected` with reason `DEPTH_EXHAUSTED` (if zero fills and depth ran out) or `OrderPartiallyFilled` (if some but not all filled — rare for market).
+6. Emit `OrderFilled` (if fully filled), or — see the back-ported note below for the implemented
+   reject/partial events.
+
+> **NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** There is **no
+> `OrderRejected` event** and **no `DEPTH_EXHAUSTED` reason** in the implementation. Step 6 maps to:
+> - **Reject** (feed `DEGRADED`/`DISCONNECTED`, empty depth, depth-fetch failure, or zero fillable
+>   levels → zero fills) → a single **`OrderCancelled` with `reason="REJECTED"`**, no trades.
+> - **Partial** (depth exhausted after some fills; market orders can't rest) → the per-fill
+>   `TradeExecuted` events + a final **`OrderCancelled` with `reason="MARKET_PARTIAL"`**; the **last
+>   fill** carries `is_final_fill=true`.
+>
+> **Slippage / VWAP (confirmed):** `fillPrice = levelPrice × (1 ± marketSlippage)` (BUY `+`, SELL
+> `−`; `marketSlippage = 0.0005`), scale 8 HALF_UP; depth requested = 20 levels. `OrderFilled`
+> `avg_fill_price` = VWAP = `Σ(qty×price)/Σqty`, scale 18 HALF_UP.
 
 **Acceptance Criteria:**
 
@@ -125,7 +147,7 @@ Inherits and expands SRS §3.4.
   - Second fill: 0.05 BTC @ `60010 × 1.0005 = 60040.005` → `TradeExecuted{price=60040.005, qty=0.05}`.
   - Then `OrderFilled{avg_fill_price=(60030×0.05 + 60040.005×0.05)/0.1 = 60035.0025, total_filled_qty=0.1}` is emitted.
 - **Given** a market BUY of 10,000 BTC (far exceeds realistic depth), **when** processed, **then** fills walk through entire depth, `OrderPartiallyFilled` emitted with `filled_qty = total_depth_qty`, a separate follow-up `OrderCancelled` with `remaining_qty > 0` cancels the unfilled portion. (See SR-MATCH-ME-007 for the mechanism.)
-- **Given** depth response is empty (degenerate), **when** processed, **then** `OrderRejected{reason: "DEPTH_EXHAUSTED"}` is emitted.
+- **Given** depth response is empty (degenerate), **when** processed, **then** `OrderCancelled{reason: "REJECTED"}` is emitted *(back-ported 2026-06-17 — was `OrderRejected{DEPTH_EXHAUSTED}`)*.
 
 ### SR-MATCH-ME-002 — Limit Order Registration & Matching
 
@@ -144,10 +166,22 @@ Inherits and expands SRS §3.4.
 3. Order candidates by FIFO (oldest `created_at` first), and by side symmetry — a single external trade is processed separately for BUY candidates and SELL candidates (they compete for different halves of the external volume: a Binance trade at price P with volume V is treated as `V` of buy liquidity from the external maker and `V` of sell liquidity from the external taker; platform BUYs consume sell-side liquidity, platform SELLs consume buy-side liquidity).
 4. Iterate candidates in FIFO order:
    - `fill_qty = min(candidate.remaining_qty, external_trade_remaining_volume)`.
-   - Emit `TradeExecuted` at `price = external_trade.price` (no slippage on limit orders).
+   - Emit `TradeExecuted` at the fill price (see the back-ported deviation below).
    - Update candidate: `filled_qty += fill_qty`; if `filled_qty == quantity`, remove from index and emit `OrderFilled`; else emit `OrderPartiallyFilled`.
    - `external_trade_remaining_volume -= fill_qty`.
    - If `external_trade_remaining_volume == 0`, stop.
+
+> **⚠️ DEVIATION (back-ported 2026-06-17 from services/matching/DECISIONS.md):** Step 4 above
+> originally specified `price = external_trade.price` (no slippage on limit orders). **The
+> implementation instead uses the price more favorable to the resting order** — the **better-of**
+> price:
+> - **BUY** → `fill_price = min(limit_price, external_price)`
+> - **SELL** → `fill_price = max(limit_price, external_price)`
+>
+> Because `findEligibleFills` only returns orders whose limit already satisfies the touch condition,
+> this differs from `external_price` only when the resting limit is **strictly better**, in which
+> case the resting order **keeps its better price**. This is the implemented contract; the original
+> spec value (`= external_price`) is superseded.
 
 **Acceptance Criteria:**
 
@@ -165,6 +199,10 @@ Inherits and expands SRS §3.4.
 - Compute fee:
   - BUY: `fee_amount = fill_quantity × taker_fee_rate`, `fee_asset = base_asset`. Example: BUY 0.1 BTC, fee = 0.0001 BTC.
   - SELL: `fee_amount = fill_quote_amount × taker_fee_rate` where `fill_quote_amount = fill_quantity × fill_price`, `fee_asset = quote_asset`. Example: SELL 0.1 BTC @ 60000, fee = 0.1 × 60000 × 0.001 = 6 USDT.
+
+> **NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** Confirmed as implemented.
+> `role` is **always `"TAKER"`** in MVP (maker/taker not tracked per-order; rates equal). `fee_amount`
+> is rounded to **scale 8, HALF_UP**. `quote_quantity = fill_quantity × fill_price`.
 
 **Acceptance Criteria:**
 

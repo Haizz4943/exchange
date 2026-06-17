@@ -534,6 +534,13 @@ Auth: Bearer
 | `limit_price` | String (decimal) | Limit only | Required for LIMIT, must be null/absent for MARKET. Multiple of `tickSize` |
 | `time_in_force` | Enum | No | Default `GTC`. MVP: GTC only |
 
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Idempotency on
+> `client_order_id` is enforced by a **DB unique index** on `(user_id, client_order_id)`; a
+> duplicate is rejected with `DUPLICATE_CLIENT_ORDER_ID` (409) when an order with the same
+> `(user_id, client_order_id)` exists within the last **24h** (matched on `created_at`). The
+> 60s app-level dedup window mentioned in SR-037 was **subsumed** by this 24h lookup (not
+> separately implemented).
+
 **Response — 201 Created:**
 ```json
 {
@@ -588,9 +595,18 @@ Auth: Bearer
 | Scenario | Freeze Asset | Freeze Amount |
 |----------|-------------|---------------|
 | BUY LIMIT | Quote (USDT) | `quantity × limit_price × (1 + takerFeeRate)` |
-| BUY MARKET | Quote (USDT) | `quantity × bestAsk × (1 + takerFeeRate) × 1.005` (0.5% slippage buffer) |
+| BUY MARKET | Quote (USDT) | `quantity × bestAsk × (1 + slippage) × (1 + takerFeeRate)` (slippage = **0.0005**) |
 | SELL LIMIT | Base (BTC) | `quantity` |
 | SELL MARKET | Base (BTC) | `quantity` |
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** `takerFeeRate = 0.001`
+> and the MARKET-BUY slippage buffer is **0.0005 (0.05%)**, not 0.5% — the freeze is
+> `qty × bestAsk × (1 + 0.0005) × (1 + 0.001)`. `bestAsk` is the Market Data ticker best ask;
+> a null/≤0 best ask yields `MARKET_DATA_UNAVAILABLE` (503). The quote-asset freeze is rounded
+> to **8 dp using `RoundingMode.UP`** (never under-freeze); SELL freeze (= raw quantity) is not
+> re-scaled. Freeze is computed and applied (Wallet `/internal/wallets/freeze`) **before** the
+> DB transaction; a frozen amount with no persisted order is reconciled later (idempotent by
+> `referenceId = orderId`).
 
 ---
 
@@ -618,6 +634,12 @@ Auth: Bearer
 | `ORDER_NOT_FOUND` | 404 | Order doesn't exist |
 | `FORBIDDEN` | 403 | Not the owner |
 | `ORDER_NOT_CANCELLABLE` | 409 | Already in terminal state (FILLED, CANCELLED, REJECTED) |
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Existence is **not
+> masked** for non-owners — a missing order returns 404 `ORDER_NOT_FOUND`, while an order owned
+> by another user returns 403 `FORBIDDEN` (same rule applies to `GET /api/v1/orders/{orderId}`).
+> Cancel persists the `CANCEL_REQUESTED` transition + outbox event in one DB transaction, then
+> unfreezes the proportional remainder **after** commit (persist-then-unfreeze, inverse of place).
 
 ---
 
@@ -671,6 +693,19 @@ Auth: Bearer
 | `page` | int | 0 | Page number |
 | `size` | int | 50 | Items per page (max 500) |
 | `sort` | String | `created_at,desc` | Sort field + direction |
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** Query-param contract as
+> implemented:
+> - `state`: comma-separated; **unknown tokens are rejected** with 400 `INVALID_STATE` (not
+>   silently skipped). Blank/absent = all states.
+> - `sort`: field is **whitelisted** to `created_at` / `updated_at`; an unknown field or
+>   direction → 400 `INVALID_SORT`. Default `created_at,desc`.
+> - `from` / `to`: accept either a full ISO-8601 instant (`2026-04-01T10:00:00Z`) or a date-only
+>   value (`2026-04-01`, interpreted as start-of-day **UTC**); both bounds are **inclusive** on
+>   `created_at`. Unparseable input → 400 `INVALID_DATE`.
+> - `size`: default 50, **max 500** (size ≤ 0 falls back to the default).
+> - The paged response envelope is **snake_case** `{content, page, size, total_elements,
+>   total_pages}`.
 
 **Response — 200 OK:** Paginated `OrderResponse` objects.
 
@@ -759,6 +794,16 @@ GET /internal/orders?state=OPEN,PARTIALLY_FILLED&page=0&size=1000
 Auth: Network-trust
 ```
 
+> **⚠️ NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** The **real path** is
+> `GET /api/v1/orders/internal/orders` (the gateway-prefixed form permitted by the service's
+> `permitAll` matcher `/api/v1/orders/internal/**`), not the bare `/internal/orders` written
+> above. No JWT and **no user filter** — it returns ALL users' open orders to feed the Matching
+> Engine index rebuild. Defaults: `state = OPEN,PARTIALLY_FILLED`; size default **1000**, max
+> **1000**. Ordering is **FIFO (`createdAt ASC`)** — this preserves matching priority when the
+> engine rebuilds its book. The projection fields are **camelCase**
+> (`InternalOrderProjection {id, userId, pair, side, type, quantity, limitPrice, filledQuantity,
+> createdAt}`) — note camelCase here, vs the snake_case public `OrderResponse`.
+
 Returns compact `InternalOrderProjection[]` — lighter than public `OrderResponse`:
 
 ```json
@@ -792,36 +837,43 @@ Matching Engine iterates pages until empty.
 ### 4.1 List My Trades
 
 ```
-GET /api/v1/trades?pair=BTCUSDT&from=2026-04-01&to=2026-04-25&page=0&size=50
+GET /api/v1/trades?page=0&size=50
 Auth: Bearer
 ```
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** The implemented endpoint
+> is JWT-authenticated; **`userId` is taken from the JWT subject** (no cross-user reads). Results are
+> **newest-first** (`executedAt DESC`). Page size default **50**, **clamped to max 200** (not 500).
+> The `pair` / `from` / `to` query filters below are **not yet implemented** — the only honored params
+> are `page` and `size`. The response body is **snake_case** (`order_id`, `quote_quantity`,
+> `fee_amount`, `executed_at`, `total_elements`, `total_pages`).
 
 **Query params:**
 
 | Param | Type | Default | Notes |
 |-------|------|---------|-------|
-| `pair` | String | all | Filter by pair |
-| `from` | ISO date | — | Start date |
-| `to` | ISO date | — | End date |
 | `page` | int | 0 | — |
-| `size` | int | 50 | Max 500 |
+| `size` | int | 50 | Max **200** (clamped) |
+| `pair` | String | all | Filter by pair — *not yet implemented* |
+| `from` | ISO date | — | Start date — *not yet implemented* |
+| `to` | ISO date | — | End date — *not yet implemented* |
 
 **Response — 200 OK:**
 ```json
 {
   "content": [
     {
-      "tradeId": "t1-...",
-      "orderId": "7d3e-...",
+      "trade_id": "t1-...",
+      "order_id": "7d3e-...",
       "pair": "BTCUSDT",
       "side": "BUY",
       "price": "55010.50000000",
       "quantity": "0.05000000",
-      "quoteQuantity": "2750.52500000",
-      "fee": "2.75052500",
-      "feeAsset": "USDT",
+      "quote_quantity": "2750.52500000",
+      "fee_amount": "2.75052500",
+      "fee_asset": "USDT",
       "role": "TAKER",
-      "executedAt": "2026-04-25T10:15:00.123Z"
+      "executed_at": "2026-04-25T10:15:00.123Z"
     }
   ],
   "page": 0,
@@ -1377,26 +1429,59 @@ Producer: Order Service → Consumer: Matching Engine
 
 ---
 
-#### `matching.events.v1` (partition key: `orderId`)
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** The Matching Engine's
+> outbox publishes to **TWO** topics, not one. Lifecycle events (`OrderFilled` /
+> `OrderPartiallyFilled` / `OrderCancelled`) go to **`matching.events.v1`** (keyed by `orderId`,
+> consumed by Order Service / Gateway). The **`TradeExecuted`** event goes to a **separate topic
+> `trade.executed`** (consumed by Wallet Service for settlement). Each outbox row stores its own
+> `topic` column, so the relay is topic-agnostic. There is **no `OrderRejected` event** — see the
+> reject/partial note below.
 
-**TradeExecuted:**
+**TradeExecuted** (topic: **`trade.executed`**):
+
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** The implemented
+> `TradeExecuted` is **SINGLE-SIDED** — the shape Wallet consumes for one order's fill — **not** the
+> two-sided maker/taker P2P shape in `exchange-common/event/trade/TradeExecutedEvent`. The simulation
+> has no platform counterparty, so there is no maker/taker pair. Fields added vs. the old block:
+> `baseAsset`, `quoteAsset`, `feeAmount` (renamed from `fee`), `isFinalFill`, `residualFrozenAmount`,
+> `residualAsset`.
+>
+> - **`isFinalFill`** is `true` only on the fill that completes the order (or the last fill of a
+>   market order before its auto-cancel), else `false` — this tells Wallet when the order is done.
+> - **`residualFrozenAmount` is always `0` and `residualAsset` is always `null`** on every trade.
+>   The Matching Engine **never** releases the placement-time freeze; the **Order Service owns
+>   residual release** on terminal (cross-ref: Order appendix Phase-6 settlement decision). Wallet
+>   skips residual release when the amount is `0`.
+
 ```json
 {
   "tradeId": "t1-...",
   "orderId": "7d3e...",
   "userId": "a1b2...",
   "pair": "BTCUSDT",
+  "baseAsset": "BTC",
+  "quoteAsset": "USDT",
   "side": "BUY",
   "price": "55010.50000000",
   "quantity": "0.05000000",
   "quoteQuantity": "2750.52500000",
-  "fee": "2.75052500",
-  "feeAsset": "USDT",
+  "feeAmount": "0.00005000",
+  "feeAsset": "BTC",
   "role": "TAKER",
-  "executedAt": "2026-04-25T10:15:00.123Z"
+  "executedAt": "2026-04-25T10:15:00.123Z",
+  "isFinalFill": false,
+  "residualFrozenAmount": "0",
+  "residualAsset": null
 }
 ```
-Producer: Matching Engine → Consumers: Order Service, Wallet Service
+Producer: Matching Engine → Consumer: Wallet Service (settlement).
+
+**Field semantics (back-ported 2026-06-17 from services/matching/DECISIONS.md):**
+- `quoteQuantity = quantity × fillPrice` (the fill price), scale 8 HALF_UP.
+- **Fee:** BUY → `feeAmount = quantity × takerRate`, `feeAsset = baseAsset`; SELL →
+  `feeAmount = quantity × price × takerRate`, `feeAsset = quoteAsset`. Fee scale 8 HALF_UP.
+- **`role` is always `"TAKER"` in MVP** — maker/taker is not tracked per-order and the rates are
+  equal (`takerRate = 0.001`), so the field is populated for reporting only.
 
 **OrderPartiallyFilled:**
 ```json
@@ -1423,18 +1508,22 @@ Producer: Matching Engine → Consumers: Order Service, Wallet Service
   "orderId": "7d3e...",
   "filledQty": "0.05000000",
   "remainingQty": "0.05000000",
+  "reason": "REJECTED",
   "cancelledAt": "2026-04-25T10:20:05.000Z"
 }
 ```
 
-**OrderRejected:**
-```json
-{
-  "orderId": "7d3e...",
-  "reason": "PRICE_FEED_UNAVAILABLE",
-  "rejectedAt": "2026-04-25T10:12:35.000Z"
-}
-```
+> **⚠️ NOTE (back-ported 2026-06-17 from services/matching/DECISIONS.md):** There is **no separate
+> `OrderRejected` event** — it does not exist in `exchange-common`. All reject/partial outcomes are
+> expressed as **`OrderCancelled`** with a `reason`:
+> - **Market reject** (feed `DEGRADED`/`DISCONNECTED`, empty depth, depth-fetch failure, or zero
+>   fillable levels) → a single `OrderCancelled` with `reason="REJECTED"`, **no trades**.
+> - **Market partial** (depth exhausted after some fills) → per-fill `TradeExecuted` events + a final
+>   `OrderCancelled` with `reason="MARKET_PARTIAL"` (market orders cannot rest). The **last fill**
+>   carries `isFinalFill=true`.
+>
+> Lifecycle events (`OrderFilled` / `OrderPartiallyFilled` / `OrderCancelled`) are published on
+> **`matching.events.v1`** (keyed by `orderId`).
 
 ---
 

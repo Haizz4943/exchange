@@ -8,6 +8,7 @@ import { WsProvider } from '@/lib/ws/WsProvider';
 import { PanelStoreProviders } from './PanelProviders';
 import { PanelRouter } from './PanelRouter';
 import { ErrorBoundary } from '@/components/layout/ErrorBoundary';
+import { ToastProvider } from '@/components/ui/Toast';
 import type { PanelRoute, HaizzEvent } from '@/lib/config/types';
 
 export interface HaizzTradingPanelProps {
@@ -70,15 +71,17 @@ export function HaizzTradingPanel(props: HaizzTradingPanelProps) {
         <QueryClientProvider client={queryClient}>
           <AuthBridgeProvider auth={props.auth} mode={props.mode}>
             <WsProvider>
-              <PanelStoreProviders>
-                <ErrorBoundary
-                  onError={(err, info) =>
-                    props.onEvent?.({ type: 'error', error: err, info: info ?? undefined })
-                  }
-                >
-                  <PanelRouter initialRoute={props.initialRoute} />
-                </ErrorBoundary>
-              </PanelStoreProviders>
+              <ToastProvider>
+                <PanelStoreProviders>
+                  <ErrorBoundary
+                    onError={(err, info) =>
+                      props.onEvent?.({ type: 'error', error: err, info: info ?? undefined })
+                    }
+                  >
+                    <PanelRouter initialRoute={props.initialRoute} />
+                  </ErrorBoundary>
+                </PanelStoreProviders>
+              </ToastProvider>
             </WsProvider>
           </AuthBridgeProvider>
         </QueryClientProvider>

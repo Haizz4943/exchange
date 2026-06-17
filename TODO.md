@@ -10,7 +10,7 @@
 | Auth | 8081 | ✅ Xong | SSO delegation (Stage 2) hoãn |
 | Wallet | 8082 | ✅ Xong | |
 | Market Data | 8085 | 🟡 Gần xong | Code đủ tính năng, **thiếu test thật** |
-| Frontend | 3000 | 🟡 Scaffold | Auth/Wallet/Chart/OrderBook/TradesTape wired qua Gateway; OrderForm-submit + khớp lệnh còn stub (chờ Order/Matching) |
+| Frontend | 3000 | 🟢 Luồng trade chạy thật | Auth/Wallet/Chart/OrderBook/TradesTape + **đặt/hủy lệnh thật** + thông báo khớp realtime (subscribe orders/wallet) + live-balance (refetch). Còn responsive ≥1024px (SR-076) + bundle (Stage 2). Ở nhánh `feat/frontend-main` |
 | Order | 8083 | ✅ Xong | Place/cancel/get/list + `/internal/orders` + outbox (EventEnvelope) + state machine + consumer fill `matching.events.v1` (áp fill + release residual). 51 unit test. Thiếu integration test thật |
 | Matching Engine | 8084 | 🟡 Gần xong | Walk-the-book + slippage + VWAP, limit FIFO khớp khi external trade chạm, `Trade`/`TradeExecuted` + fee taker 0.10%, pause/reject khi feed degraded; có unit test (50 test). Residual freeze do Order release khi terminal; limit fill dùng better-of-price (xem DECISIONS). Còn thiếu integration test thật (Kafka/Postgres) |
 | API + WS Gateway | 8080 | ✅ Xong | HS256 dev; route+JWT+rate-limit+WS fan-out; build xanh, 13 unit test. live-balance còn nửa-stub (wallet phát delta) |
@@ -84,7 +84,7 @@
 - [ ] ⬜ **Unit/integration test** (mapper, ingestion, UDF, health, backfill) — SRS §13
 - [ ] 🧊 Continuous aggregates / compression (post-MVP)
 
-## 3.6 Frontend — 🟡 (scaffold xong, chưa tích hợp full)
+## 3.6 Frontend — 🟢 (luồng trade chạy thật; còn responsive/bundle)
 
 - [x] Next.js + React 18, Tailwind (prefix `hx-`) (SR-070)
 - [x] Entry embeddable single-mount `panel/` (SR-071)
@@ -94,9 +94,10 @@
 - [x] WsClient (multiplex, reconnect) — Gateway đã cấp data real-time (SR-074)
 - [x] 🟢 OrderBook / TradesTape / live-chart — đã có data qua WS Gateway (depth/trade/kline)
   - 2026-06-16: fix render chart (StrictMode tạo trùng → 2 logo; chart trống khi quay lại pair đã cache) + Toast SSR portal — ở branch `feat/fe-market-data`, **chưa merge vào main**
-- [ ] 🟡 OrderForm-submit + thông báo khớp lệnh — vẫn **stub** (cần Order + Matching service)
-- [ ] 🟡 Live-balance: WS có chạy nhưng wallet chỉ phát delta → chưa cập nhật số dư đầy đủ (xem §3.7)
-- [ ] 🟡 Wallet/Orders/Trades tables — gọi API thật, chờ backend tương ứng
+- [x] OrderForm-submit nối Order Service (đặt lệnh thật) + nút hủy lệnh trong Open Orders (SR-073/038) — nhánh `feat/frontend-main`
+- [x] Thông báo khớp lệnh realtime: subscribe channel `orders`/`wallet`, map matching.events.v1 → toast + invalidate orders/trades (SR-074)
+- [x] Live-balance: refetch `/wallets/me` khi có WS wallet event (gateway chỉ phát delta) — số dư luôn đúng
+- [x] Wallet/Orders/Trades tables — gọi API thật qua Gateway (Order/Matching đã có)
 - [ ] ⬜ Responsive polish ≥1024px (SR-076)
 - [ ] 🧊 Build library bundle (rollup) cho Stage 2 embed
 

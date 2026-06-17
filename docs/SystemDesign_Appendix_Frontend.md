@@ -622,42 +622,72 @@ Invalidation after mutations:
 
 ### 5.5 WS → Store Sync
 
-A single `WsStoreSyncer` component mounts near the panel root. On every WS message matching a known schema, it dispatches to the appropriate Zustand store:
+A single `WsStoreSyncer` component mounts near the panel root (mounted via `PanelProviders`, so it is shared by **both** the standalone `src/app` tree and the embedded `src/panel` tree). On every WS message matching a known `schema`, it dispatches to the appropriate Zustand store and/or invalidates a TanStack query.
+
+> **Implementation note (2026-06-17, back-ported from `services/frontend/DECISIONS.md`).** The shipped syncer diverges from the original sketch below in several intentional ways — keep this section in sync with the code:
+> - **Location:** `src/panel/WsStoreSyncer.tsx` (NOT `src/lib/ws/`). It imports from `features/*` (stores), which the import-direction rules (§2.3) forbid inside `lib/`.
+> - **Handler API:** `ws.onSchema(schema, handler)` (the method named `onMessage` in §6.2 below is exposed as `onSchema` in code).
+> - **Channel subscriptions:** market channels are subscribed by `OrderBook`/`TradesTape` per pair; the two **user-scoped** channels `orders` and `wallet` have no owning component, so the syncer subscribes to them globally via `useWsSubscription('orders')` + `useWsSubscription('wallet')`. The gateway filters delivery by the connection's `userId` (from the JWT handshake).
+> - **Matching payload mapping:** the gateway forwards matching payloads in **camelCase with no `state`** (`{orderId, filledQuantity, avgPrice|fillPrice, remainingQuantity, reason}`). The syncer maps them to the snake-case `FillUpdate` and **derives `state` from the schema suffix** (`OrderFilled`→`FILLED`, `OrderPartiallyFilled`→`PARTIALLY_FILLED`, `OrderCancelled`→`CANCELLED`).
+> - **Tables read via TanStack Query, not the stores** — so each matching event also `invalidateQueries(['orders'])` + `(['trades'])`; the store `applyFillUpdate` is kept for any store-based consumers.
+> - **Live balance:** the gateway forwards `wallet.transactions.v1` as a **raw delta** (`deltaAvailable/deltaFrozen`, no absolute balance). Applying deltas client-side drifts on missed messages/reconnect, so on any `wallet` event the syncer simply **refetches `/wallets/me`** via `invalidateQueries(['wallets'])` (absolute balance = source of truth). This resolves the "wallet emits delta only" gap (§3.7 of TODO / §6.2 of gateway DECISIONS).
+> - **Toasts:** fills surface via the existing Toast (`OrderFilled`→success, `OrderPartiallyFilled`→info, `OrderCancelled`→warning). `useToast`/`useQueryClient` require `ToastProvider` + `QueryClientProvider` to wrap `PanelProviders` in **both** entry trees.
 
 ```tsx
-// src/lib/ws/WsStoreSyncer.tsx
+// src/panel/WsStoreSyncer.tsx  (shape — see code for full detail)
 export function WsStoreSyncer() {
   const ws = useWsClient();
-  const tradeStore = useTradeStoreRaw();
   const ordersStore = useOrdersStoreRaw();
-  const walletStore = useWalletStoreRaw();
+  const tradeStore = useTradeStoreRaw();
+  const queryClient = useQueryClient();
+  const { push } = useToast();
+
+  // user-scoped channels with no owning component
+  useWsSubscription('orders');
+  useWsSubscription('wallet');
 
   useEffect(() => {
     const subs = [
-      ws.onMessage('market-data.depth.v1', (msg) =>
-        tradeStore.getState().applyDepthUpdate(msg.pair, msg)
-      ),
-      ws.onMessage('market-data.events.v1.ExternalTradeObserved', (msg) =>
-        tradeStore.getState().appendRecentTrade(msg.pair, msg)
-      ),
-      ws.onMessage('matching.events.v1.OrderPartiallyFilled', (msg) =>
-        ordersStore.getState().applyFillUpdate(msg)
-      ),
-      ws.onMessage('matching.events.v1.OrderFilled', (msg) =>
-        ordersStore.getState().applyFillUpdate(msg)
-      ),
-      ws.onMessage('wallet.events.v1.WalletTransactionRecorded', (msg) =>
-        walletStore.getState().applyBalanceChange(msg)
-      ),
+      ws.onSchema('market-data.depth.v1', (p) =>
+        tradeStore.getState().applyDepthUpdate(p.pair, p)),
+      ws.onSchema('market-data.events.v1.ExternalTradeObserved', (p) =>
+        tradeStore.getState().appendRecentTrade(p.pair, p)),
+
+      ws.onSchema('matching.events.v1.OrderFilled', (p) => {
+        ordersStore.getState().applyFillUpdate({
+          order_id: p.orderId, state: 'FILLED',
+          filled_qty: p.filledQuantity, avg_fill_price: p.avgPrice });
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        queryClient.invalidateQueries({ queryKey: ['trades'] });
+        push({ message: 'Lệnh đã khớp đầy đủ', variant: 'success' });
+      }),
+      ws.onSchema('matching.events.v1.OrderPartiallyFilled', (p) => {
+        ordersStore.getState().applyFillUpdate({
+          order_id: p.orderId, state: 'PARTIALLY_FILLED',
+          filled_qty: p.filledQuantity, avg_fill_price: p.fillPrice });
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        queryClient.invalidateQueries({ queryKey: ['trades'] });
+        push({ message: 'Lệnh khớp một phần', variant: 'info' });
+      }),
+      ws.onSchema('matching.events.v1.OrderCancelled', (p) => {
+        ordersStore.getState().applyFillUpdate({ order_id: p.orderId, state: 'CANCELLED' });
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        push({ message: p.reason === 'REJECTED' ? 'Lệnh bị từ chối' : 'Lệnh đã hủy',
+               variant: 'warning' });
+      }),
+
+      // wallet emits delta-only → refetch absolute balance
+      ws.onSchema('wallet.events.v1.WalletTransactionRecorded', () =>
+        queryClient.invalidateQueries({ queryKey: ['wallets'] })),
     ];
     return () => subs.forEach((unsub) => unsub());
-  }, [ws, tradeStore, ordersStore, walletStore]);
+  }, [ws, ordersStore, tradeStore, queryClient, push]);
 
   return null;
 }
 ```
 
-This keeps WS-handling logic out of individual components — they just read from stores.
+This keeps WS-handling logic out of individual components — they read from stores or refetch via queries.
 
 ---
 
@@ -732,6 +762,8 @@ export function ordersApi(client: ApiClient) {
 ### 6.2 WebSocket Client
 
 Heart of real-time UX. Design: **single connection per panel instance**, multiplexing via `channels`:
+
+> **Note (2026-06-17).** In the shipped code the handler-registration method is named **`onSchema(schema, handler)`** (the `onMessage(schema, ...)` below). The on-wire frame from the gateway is `{channel, schema, payload, timestamp}` (the client routes by `schema`, reads `payload`). Subscribe/unsubscribe and ref-counting are as documented.
 
 ```ts
 // src/lib/ws/WsClient.ts

@@ -13,7 +13,7 @@
 | Frontend | 3000 | 🟢 Luồng trade chạy thật | Auth/Wallet/Chart/OrderBook/TradesTape + **đặt/hủy lệnh thật** + thông báo khớp realtime (subscribe orders/wallet) + live-balance (refetch). Còn responsive ≥1024px (SR-076) + bundle (Stage 2). Ở nhánh `feat/frontend-main` |
 | Order | 8083 | ✅ Xong | Place/cancel/get/list + `/internal/orders` + outbox (EventEnvelope) + state machine + consumer fill `matching.events.v1` (áp fill + release residual). 51 unit test. Thiếu integration test thật |
 | Matching Engine | 8084 | 🟡 Gần xong | Walk-the-book + slippage + VWAP, limit FIFO khớp khi external trade chạm, `Trade`/`TradeExecuted` + fee taker 0.10%, pause/reject khi feed degraded; có unit test (50 test). Residual freeze do Order release khi terminal; limit fill dùng better-of-price (xem DECISIONS). Còn thiếu integration test thật (Kafka/Postgres) |
-| API + WS Gateway | 8080 | ✅ Xong | HS256 dev; route+JWT+rate-limit+WS fan-out; build xanh, 13 unit test. live-balance còn nửa-stub (wallet phát delta) |
+| API + WS Gateway | 8080 | ✅ Xong | HS256 dev; route+JWT+rate-limit+WS fan-out; build xanh, 13 unit test. live-balance: wallet phát delta → FE refetch `/wallets/me` |
 | Hạ tầng (Docker) | — | ✅ Xong | postgres, timescale, redis, kafka |
 
 ---
@@ -111,7 +111,7 @@
 - [x] Rate-limit per-user 60 rps / 120 burst + per-IP 120/240 (SR-082) — Redis token-bucket Lua
 - [x] WS Gateway multiplex price/order/wallet, max 5 conn/user (SR-083) — reactive WebFlux, Sinks per-session
 - [x] WS auth qua JWT handshake (`?token=`) + đóng 4401 khi token hết hạn (SR-084)
-- [ ] 🟡 Fan-out `wallet` live-balance: wallet phát **delta** nhưng FE cần số dư tuyệt đối → cần back-port (wallet thêm absolute balance HOẶC FE refetch). Xem `services/gateway/DECISIONS.md`
+- [x] Fan-out `wallet` live-balance: wallet phát **delta** → **FE refetch `/wallets/me`** khi nhận event (giải pháp đã chọn; số dư tuyệt đối luôn đúng). Xem `services/frontend/DECISIONS.md` D6 + `services/gateway/DECISIONS.md`
 - [ ] 🧊 RS256 + JWKS cho prod; circuit breaker per-route; multi-instance Redis pub/sub bridge (post-MVP)
 - [ ] ⬜ Integration test (routing qua WireMock, WS handshake/subscribe, Kafka fan-out) — chưa viết
 

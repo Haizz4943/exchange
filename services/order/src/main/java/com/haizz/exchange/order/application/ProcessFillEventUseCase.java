@@ -115,9 +115,18 @@ public class ProcessFillEventUseCase {
             case SKIPPED -> log.info("OrderCancelled ignored orderId={} reason={} — order already "
                     + "terminal", orderId, event.reason());
             case APPLIED -> {
-                log.info("OrderCancelled applied orderId={} reason={} → CANCELLED",
-                        orderId, event.reason());
-                releaseResidual(orderId, result);
+                if (result.wasCancelRequested()) {
+                    // Terminal ACK of a user-initiated DELETE: CancelOrderUseCase
+                    // already released the unfilled freeze (reason "CANCELLED"), so
+                    // this confirmation ONLY finalizes the state — releasing again
+                    // here would double-release.
+                    log.info("OrderCancelled (user ACK) finalized orderId={} reason={} → "
+                            + "CANCELLED (freeze already released by DELETE)", orderId, event.reason());
+                } else {
+                    log.info("OrderCancelled applied orderId={} reason={} → CANCELLED",
+                            orderId, event.reason());
+                    releaseResidual(orderId, result);
+                }
             }
         }
     }

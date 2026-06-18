@@ -24,6 +24,7 @@ public class OrderDispatcher {
 
     private final OpenOrdersIndex openOrdersIndex;
     private final MarketOrderHook marketOrderHook;
+    private final FillEmitter fillEmitter;
 
     /**
      * Handle a newly placed order.
@@ -43,9 +44,15 @@ public class OrderDispatcher {
                 ro.getOrderId(), ro.getPair(), ro.getSide(), ro.getLimitPrice(), ro.getTotalQuantity());
     }
 
-    /** Handle a cancellation: remove the order from the index if present. */
-    public void onOrderCancelled(UUID orderId, String pair) {
+    /**
+     * Handle a user cancellation: remove the order from the index (if present) and
+     * confirm back to the Order service so it can finalize CANCEL_REQUESTED →
+     * CANCELLED. The confirmation is a state-only ACK — the Order service's DELETE
+     * path already released the freeze.
+     */
+    public void onOrderCancelled(UUID orderId, UUID userId, String pair) {
         openOrdersIndex.remove(orderId);
         log.info("Removed cancelled order from index orderId={} pair={}", orderId, pair);
+        fillEmitter.emitCancelConfirmed(orderId, userId, pair);
     }
 }

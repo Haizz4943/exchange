@@ -7,6 +7,21 @@ original spec documents. All points below have been back-ported into
 
 ---
 
+## 2026-06-18 — Public-path matching: exact collection path + `exchangeInfo` (E2E fix)
+**Status:** 🟡 Pending review
+**Decision:** `JwtAuthenticationFilter.isPublicPath` now also matches a path equal to a
+whitelist prefix without its trailing slash (so `/api/v1/trading-pairs` — not just
+`/api/v1/trading-pairs/…` — is public), and `/api/v1/marketdata/exchangeInfo/` was added
+to the public list.
+**Reason:** Found during E2E verification: `exchangeInfo` (API_SPEC §5.4, Auth: None)
+returned 401, and the canonical collection paths (`/api/v1/trading-pairs`,
+`/api/v1/assets`) 401'd because `startsWith("/api/v1/trading-pairs/")` doesn't match the
+slash-less form. (Note: the order service still lacks handlers for trading-pairs/assets —
+see `docs/DECISIONS.md`.)
+**Where:** `filter/JwtAuthenticationFilter.java`
+**Suggested doc:** API_SPEC §5.4 / Gateway appendix — list `marketdata/exchangeInfo` as a
+public route and note the slash-insensitive public-path match.
+
 ## 1. JWT Algorithm: HS256 instead of RS256
 
 **Decision:** Gateway validates JWTs using HS256 with the shared `JWT_SECRET`.

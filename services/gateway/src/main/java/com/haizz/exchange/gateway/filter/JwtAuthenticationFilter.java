@@ -40,7 +40,9 @@ public class JwtAuthenticationFilter implements GatewayFilter, Ordered {
             "/api/v1/auth/",
             "/udf/",
             "/api/v1/trading-pairs/",
-            "/api/v1/assets/"
+            "/api/v1/assets/",
+            // Pair metadata is public per API_SPEC §5.4 (SR-066, Auth: None)
+            "/api/v1/marketdata/exchangeInfo/"
     );
 
     private final JwtVerifier jwtVerifier;
@@ -77,7 +79,11 @@ public class JwtAuthenticationFilter implements GatewayFilter, Ordered {
     }
 
     private boolean isPublicPath(String path) {
-        return PUBLIC_PATH_PREFIXES.stream().anyMatch(path::startsWith);
+        // Match either a sub-path (prefix incl. trailing slash) OR the exact collection
+        // path without the trailing slash (e.g. "/api/v1/trading-pairs" itself).
+        return PUBLIC_PATH_PREFIXES.stream().anyMatch(prefix ->
+                path.startsWith(prefix)
+                        || (prefix.endsWith("/") && path.equals(prefix.substring(0, prefix.length() - 1))));
     }
 
     private Mono<Void> writeErrorResponse(ServerWebExchange exchange, HttpStatus status,

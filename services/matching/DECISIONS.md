@@ -5,6 +5,20 @@
 Per-service log of judgment calls not dictated by the specs (SRS / System Design /
 API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 
+## 2026-06-18 — Added `application-dev.yml` with shared dev JWT secret (E2E fix)
+**Status:** 🟡 Pending review
+**Decision:** Created `src/main/resources/application-dev.yml` setting
+`matching.jwt.secret: dev-secret-key-do-not-use-in-production-32x` (HS256), matching
+auth/gateway/order's dev profile.
+**Why:** Matching was the only service without a dev-profile override, so under
+`SPRING_PROFILES_ACTIVE=dev` it validated tokens with its default `application.yml` secret
+(`change-me-in-prod-…`) — different from the secret auth signs with — and **every matching
+endpoint returned 401** (e.g. `GET /api/v1/trades` couldn't be read though trades persisted
+correctly). Found during E2E verification.
+**Where:** `services/matching/src/main/resources/application-dev.yml`
+**Suggested doc:** SystemDesign (dev config) — note all JWT-validating services must share
+the same dev HS256 secret; consider centralizing it.
+
 ## Phase 1 — Scaffold
 
 ### DB name `match_db`

@@ -2,6 +2,7 @@ package com.haizz.exchange.order.application;
 
 import com.haizz.exchange.common.enums.OrderSide;
 import com.haizz.exchange.order.domain.Order;
+import com.haizz.exchange.order.domain.OrderState;
 import com.haizz.exchange.order.infrastructure.persistence.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -105,9 +106,15 @@ public class FillPersister {
         if (order.getState().isTerminal()) {
             return FillResult.skipped(order);
         }
+        // A confirmation for an order already in CANCEL_REQUESTED is the terminal
+        // ACK of a user-initiated DELETE (whose unfilled freeze release is already
+        // owned by CancelOrderUseCase). Any other prior state is a matching-driven
+        // cancel (REJECTED / MARKET_PARTIAL) whose residual the Order service must
+        // still release. Capture that distinction for the use case.
+        boolean wasCancelRequested = order.getState() == OrderState.CANCEL_REQUESTED;
         order.markCancelled();
         Order saved = orderRepository.save(order);
-        return FillResult.applied(saved);
+        return FillResult.cancelled(saved, wasCancelRequested);
     }
 
     /** Outcome of a persist attempt. */
@@ -125,21 +132,27 @@ public class FillPersister {
             BigDecimal freezeAmount,
             String freezeAsset,
             BigDecimal filledQuantity,
-            BigDecimal avgFillPrice) {
+            BigDecimal avgFillPrice,
+            boolean wasCancelRequested) {
 
         static FillResult missing() {
-            return new FillResult(Outcome.MISSING, null, null, null, null, null, null);
+            return new FillResult(Outcome.MISSING, null, null, null, null, null, null, false);
         }
 
         static FillResult skipped(Order order) {
-            return snapshot(Outcome.SKIPPED, order);
+            return snapshot(Outcome.SKIPPED, order, false);
         }
 
         static FillResult applied(Order order) {
-            return snapshot(Outcome.APPLIED, order);
+            return snapshot(Outcome.APPLIED, order, false);
         }
 
-        private static FillResult snapshot(Outcome outcome, Order order) {
+        /** Terminal cancellation; {@code wasCancelRequested} flags a user-cancel ACK. */
+        static FillResult cancelled(Order order, boolean wasCancelRequested) {
+            return snapshot(Outcome.APPLIED, order, wasCancelRequested);
+        }
+
+        private static FillResult snapshot(Outcome outcome, Order order, boolean wasCancelRequested) {
             return new FillResult(
                     outcome,
                     order.getUserId(),
@@ -147,7 +160,8 @@ public class FillPersister {
                     order.getFreezeAmount(),
                     order.getFreezeAsset(),
                     order.getFilledQuantity(),
-                    order.getAvgFillPrice());
+                    order.getAvgFillPrice(),
+                    wasCancelRequested);
         }
     }
 }

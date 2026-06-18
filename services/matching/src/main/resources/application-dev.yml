@@ -1,0 +1,13 @@
+spring:
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    com.haizz.exchange.matching: INFO
+
+matching:
+  jwt:
+    algorithm: HS256
+    # Must match the HS256 secret that auth signs & gateway/order/wallet verify with in dev
+    secret: dev-secret-key-do-not-use-in-production-32x

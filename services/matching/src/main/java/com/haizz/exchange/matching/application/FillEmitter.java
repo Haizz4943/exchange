@@ -155,4 +155,19 @@ public class FillEmitter {
                 new OrderCancelledEvent(orderId, userId, pair, reason, Instant.now()));
         log.info("Market order rejected orderId={} pair={} reason={}", orderId, pair, reason);
     }
+
+    /**
+     * Confirm a user-initiated cancellation back to the Order service so it can
+     * finalize {@code CANCEL_REQUESTED → CANCELLED}. Emitted after the resting
+     * order is removed from the in-memory index. The Order service owns the freeze
+     * release for user cancels (its DELETE path), so this is a state-only ACK —
+     * reason {@code "USER_CANCELLED"} lets the consumer skip a residual release.
+     */
+    @Transactional
+    public void emitCancelConfirmed(UUID orderId, UUID userId, String pair) {
+        outboxPublisher.enqueue("OrderCancelled", appProperties.kafka().matchingEventsTopic(),
+                orderId.toString(),
+                new OrderCancelledEvent(orderId, userId, pair, "USER_CANCELLED", Instant.now()));
+        log.info("Confirmed user cancellation orderId={} pair={}", orderId, pair);
+    }
 }

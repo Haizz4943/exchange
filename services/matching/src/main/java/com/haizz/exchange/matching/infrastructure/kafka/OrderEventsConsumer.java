@@ -73,7 +73,8 @@ public class OrderEventsConsumer {
         EventEnvelope<OrderCancelledEvent> env = objectMapper.readValue(
                 json, new TypeReference<EventEnvelope<OrderCancelledEvent>>() {});
         OrderCancelledEvent p = env.payload();
-        pairExecutorRegistry.submit(p.pair(), () -> orderDispatcher.onOrderCancelled(p.orderId(), p.pair()));
+        pairExecutorRegistry.submit(p.pair(),
+                () -> orderDispatcher.onOrderCancelled(p.orderId(), p.userId(), p.pair()));
     }
 
     /** Reads only the {@code eventType} field so we can route before binding the payload type. */

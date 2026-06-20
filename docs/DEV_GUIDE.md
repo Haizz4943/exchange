@@ -13,7 +13,7 @@
 
 This is the bridge between System Design and code. It tells you **what to build first**, **how to organize it**, and **what conventions to follow**. It does not repeat architecture rationale (see `SystemDesign.md`) or requirements (see `SRS.md`).
 
-Reading order: §1 (repo layout) → §4 (dev environment setup) → §3 (implementation roadmap) → build.
+Reading order: §1 (repo layout) → §2 (coding standards) → §3 (implementation roadmap) → build. Cài đặt môi trường dev xem [`GETTING_STARTED.md`](../GETTING_STARTED.md).
 
 ---
 
@@ -431,119 +431,13 @@ Market Data Service REST scaffold already exists. Expand with:
 
 ---
 
-## 4. Development Environment Setup
-
-### 4.1 Prerequisites
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| JDK | jdk 21 | Java runtime |
-| Maven |  3.9.15 | Build system |
-| Node.js | v25.9.0 | Frontend build |
-| npm | 11.12.1 | Package manager |
-| Docker Desktop | 29.2.1 | Containers |
-| Docker Compose | bundled with Docker Desktop | Orchestration |
-| IDE | VS code | Development |
-| plugins | Lombok, Spring Boot, Docker | Productivity |
-| DB client | DBeaver | Database inspection |
-| API client | Postman | API testing |
-
-### 4.2 Getting Started
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/haizz/haizz-exchange.git
-cd haizz-exchange
-
-# 2. Set up environment variables
-cp .env.example .env
-# Edit .env — fill in JWT_SIGNING_KEY, PG_USER, PG_PASSWORD, INTERNAL_HMAC_SECRET
-
-# 3. Start infrastructure only
-docker-compose up -d postgres-main postgres-timescale redis kafka
-
-# 4. Wait for healthy state
-docker-compose ps  # all should be "healthy" or "running"
-
-# 5. Build shared library
-cd exchange-common
-mvn clean install
-cd ..
-
-# 6. Run a service locally (example: auth-service)
-cd services/auth-service
-SPRING_PROFILES_ACTIVE=dev mvn spring-boot:run
-
-# 7. Or start everything via Docker
-docker-compose up --build
-```
-
-### 4.3 Docker Compose Services
-
-| Service | Image | Container Port | Host Port (dev) | Purpose |
-|---------|-------|---------------|-----------------|---------|
-| `postgres-main` | `postgres:15-alpine` | 5432 | 5432 | Auth, Wallet, Order, Matching DBs |
-| `postgres-timescale` | `timescale/timescaledb:2.14.2-pg15` | 5432 | 5433 | Market Data OHLCV |
-| `redis` | `redis:7-alpine` | 6379 | 6379 | Cache, rate limiting, dedup |
-| `kafka` | `apache/kafka:3.7.0` | 9092 | 9092 | Event bus (KRaft mode, no Zookeeper) |
-| `auth-service` | Built from Dockerfile | 8081 | — | Identity & JWT |
-| `wallet-service` | Built from Dockerfile | 8082 | — | Balances & audit | 
-| `order-service` | Built from Dockerfile | 8083 | — | Order lifecycle |
-| `matching-engine` | Built from Dockerfile | 8084 | — | Simulated fills |
-| `market-data-service` | Built from Dockerfile | 8085 | — | Binance data + UDF |
-| `gateway` | Built from Dockerfile | 8080 | 8080 | API Gateway + WS |
-| `frontend` | Built from Dockerfile | 3000 | 3000 | Next.js UI |
-
-**Dev workflow:** Run infra in Docker, run the service you're working on locally (IDE + hot-reload). Other services run in Docker if needed for integration.
-
-### 4.4 Configuration
-
-**Spring profiles:**
-
-| Profile | Usage | Key Behaviors |
-|---------|-------|--------------|
-| `dev` | Local dev, IDE run | DEBUG logging, `DataSeeder` enabled, H2 fallback if PG unreachable |
-| `docker` | Running inside docker-compose | Docker DNS for service discovery (`kafka:9092`, `redis:6379`) |
-| `prod` | Future production | JSON-only logs, no dev endpoints, strict CORS |
-
-**Configuration precedence** (lowest → highest):
-
-1. Hard-coded defaults in `@ConfigurationProperties`
-2. `application.yml` — baseline, committed
-3. `application-<profile>.yml` — profile-specific, committed (no secrets)
-4. Environment variables — injected by docker-compose
-5. `.env` file — gitignored, holds secrets
-
-### 4.5 Dockerfile Template (Spring Boot services)
-
-```dockerfile
-# Multi-stage build
-FROM eclipse-temurin:21-jdk-jammy AS build
-WORKDIR /build
-
-# Copy parent POM + exchange-common first for caching
-COPY pom.xml ./pom.xml
-COPY exchange-common ./exchange-common
-RUN mvn -f exchange-common/pom.xml install -DskipTests
-
-# Copy service module
-COPY services/<service-name> ./services/<service-name>
-RUN mvn -f services/<service-name>/pom.xml package -DskipTests
-
-# Runtime image
-FROM eclipse-temurin:21-jre-jammy
-WORKDIR /app
-COPY --from=build /build/services/<service-name>/target/*.jar app.jar
-
-EXPOSE <port>
-ENTRYPOINT ["java", "-jar", "app.jar"]
-```
+> **Environment setup** (prerequisites, Docker, chạy từng service, test API): xem [`GETTING_STARTED.md`](../GETTING_STARTED.md).
 
 ---
 
-## 5. Dependency Management
+## 4. Dependency Management
 
-### 5.1 Maven Parent POM (Version Pins)
+### 4.1 Maven Parent POM (Version Pins)
 
 ```xml
 <properties>
@@ -559,7 +453,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 
 All service modules declare dependencies against the parent BOM — no ad-hoc version overrides unless documented as ADR.
 
-### 5.2 Key Backend Dependencies
+### 4.2 Key Backend Dependencies
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
@@ -577,7 +471,7 @@ All service modules declare dependencies against the parent BOM — no ad-hoc ve
 | Testcontainers | 1.20.x | Integration tests | PG, Kafka, Redis containers in test |
 | ArchUnit | 1.x | Architecture enforcement | Verify package dependency rules |
 
-### 5.3 Key Frontend Dependencies
+### 4.3 Key Frontend Dependencies
 
 | Dependency | Version | Purpose |
 |-----------|---------|---------|
@@ -589,7 +483,7 @@ All service modules declare dependencies against the parent BOM — no ad-hoc ve
 | TanStack Query (React Query) | 5.x | Server state, caching |
 | Tailwind CSS | 3.x | Utility-first styling |
 
-### 5.4 Dependency Rules
+### 4.4 Dependency Rules
 
 - Pin all dependency versions — no `LATEST` or `RELEASE`.
 - `exchange-common` must have zero business logic and zero DB dependencies.
@@ -597,9 +491,9 @@ All service modules declare dependencies against the parent BOM — no ad-hoc ve
 
 ---
 
-## 6. API Implementation Guide
+## 5. API Implementation Guide
 
-### 6.1 Controller Pattern
+### 5.1 Controller Pattern
 
 ```java
 @RestController
@@ -629,7 +523,7 @@ public class OrderController {
 - Business validation (step size, tick size, min notional) in the use case layer.
 - Response DTO mapped from domain entity via `from()` static factory.
 
-### 6.2 Request/Response DTOs
+### 5.2 Request/Response DTOs
 
 ```java
 public record PlaceOrderRequest(
@@ -652,7 +546,7 @@ public record PlaceOrderRequest(
 - Timestamps as `Instant`, serialized as ISO-8601 strings.
 - IDs as `UUID`, serialized as strings.
 
-### 6.3 Pagination
+### 5.3 Pagination
 
 Standard cursor-based pagination for list endpoints:
 
@@ -670,7 +564,7 @@ public record PageResponse<T>(
 ) {}
 ```
 
-### 6.4 Internal API Conventions
+### 5.4 Internal API Conventions
 
 Internal endpoints (called by other services, not by users):
 
@@ -680,9 +574,9 @@ Internal endpoints (called by other services, not by users):
 
 ---
 
-## 7. Kafka Event Standards
+## 6. Kafka Event Standards
 
-### 7.1 Event Envelope
+### 6.1 Event Envelope
 
 Every Kafka message follows a standard envelope:
 
@@ -698,7 +592,7 @@ public record EventEnvelope<T>(
 ) {}
 ```
 
-### 7.2 Topic Catalog
+### 6.2 Topic Catalog
 
 | Topic | Producer | Consumers | Partition Key |
 |-------|----------|-----------|---------------|
@@ -710,13 +604,13 @@ public record EventEnvelope<T>(
 | `market-data.depth.v1` | Market Data | Gateway (WS fan-out) | `pair` |
 | `market-data.kline.v1` | Market Data | Gateway (WS fan-out) | `pair` |
 
-### 7.3 Consumer Group Naming
+### 6.3 Consumer Group Naming
 
 Format: `<consuming-service>-<topic>-group`
 
 Example: `matching-engine-orders-events-v1-group`
 
-### 7.4 Outbox Pattern
+### 6.4 Outbox Pattern
 
 Every service that publishes events uses the outbox pattern:
 
@@ -727,13 +621,13 @@ Every service that publishes events uses the outbox pattern:
 
 ---
 
-## 8. Database Migration Strategy
+## 7. Database Migration Strategy
 
-### 8.1 Tool: Flyway
+### 7.1 Tool: Flyway
 
 Every service with a database uses Flyway. Migrations run automatically at application startup.
 
-### 8.2 Migration File Naming
+### 7.2 Migration File Naming
 
 ```
 V1__create_users_table.sql
@@ -743,7 +637,7 @@ V3__create_orders_table.sql
 
 Convention: `V<number>__<description>.sql` (double underscore). Numbers are sequential per service.
 
-### 8.3 Rules
+### 7.3 Rules
 
 - Migrations are **append-only**. Never edit an existing migration file after it's been applied.
 - Every table change requires a new migration.
@@ -753,11 +647,11 @@ Convention: `V<number>__<description>.sql` (double underscore). Numbers are sequ
 
 ---
 
-## 9. Testing Strategy (Overview)
+## 8. Testing Strategy (Overview)
 
 Detailed test plan is a separate document. Key principles here for dev workflow.
 
-### 9.1 Test Pyramid per Service
+### 8.1 Test Pyramid per Service
 
 | Layer | Framework | What's Tested | Target Count |
 |-------|-----------|---------------|-------------|
@@ -765,7 +659,7 @@ Detailed test plan is a separate document. Key principles here for dev workflow.
 | Integration | Spring Boot Test + Testcontainers | Full request → DB → Kafka flow | 20–30% |
 | Architecture | ArchUnit | Package dependency rules, naming | 5–10 rules per service |
 
-### 9.2 Test Commands
+### 8.2 Test Commands
 
 ```bash
 # Unit tests only (fast — no Docker needed)
@@ -781,7 +675,7 @@ mvn verify
 cd frontend && npm test
 ```
 
-### 9.3 Key Test Cases to Prioritize
+### 8.3 Key Test Cases to Prioritize
 
 - Wallet: balance invariant (`total = available + frozen`) never violated under concurrent freeze/unfreeze.
 - Order: state machine transitions — every valid and invalid transition tested.
@@ -791,9 +685,9 @@ cd frontend && npm test
 
 ---
 
-## 10. TradingView Integration Summary
+## 9. TradingView Integration Summary
 
-### 10.1 Architecture
+### 9.1 Architecture
 
 ```
 Browser
@@ -802,7 +696,7 @@ Browser
         └── [WS]  Subscribe kline updates → Gateway WS → Kafka → Market Data Service → Binance WS
 ```
 
-### 10.2 Key Points
+### 9.2 Key Points
 
 - **Library:** TradingView Lightweight Charts v5 (MIT, ~40KB gzipped). No UDF adapter needed — Lightweight consumes data via method calls (`series.setData()`, `series.update()`).
 - **Data source:** The `/udf/*` endpoints are called directly via `fetch` from the `useChartData` hook, NOT via a TV UDF adapter class.
@@ -810,7 +704,7 @@ Browser
 - **Resolutions supported:** 1m, 5m, 15m, 1h, 4h, 1d.
 - **Migration path to Advanced Charting Library (post-MVP):** Replace `createChart` with `new TradingView.widget(...)`, create a UDF DataFeed adapter class, and distribute the Advanced library via `public/` or CDN. The `features/chart/` directory is isolated for this purpose.
 
-### 10.3 Data Feed for VN Stocks (Post-MVP)
+### 9.3 Data Feed for VN Stocks (Post-MVP)
 
 The `MarketDataFeedProvider` interface in Market Data Service abstracts the data source. When SSI/TCBS integration is built:
 
@@ -820,13 +714,13 @@ The `MarketDataFeedProvider` interface in Market Data Service abstracts the data
 
 ---
 
-## 11. Embeddability Contract (Frontend)
+## 10. Embeddability Contract (Frontend)
 
-### 11.1 Stage 1 — Standalone
+### 10.1 Stage 1 — Standalone
 
 Next.js app runs at `localhost:3000`. Own auth flow. Own routing. Full-page layout.
 
-### 11.2 Stage 2 — Embedded in Host Next.js App
+### 10.2 Stage 2 — Embedded in Host Next.js App
 
 The host app imports `@haizz/trading-panel` as an npm package:
 
@@ -850,7 +744,7 @@ export default function TradingPage() {
 }
 ```
 
-### 11.3 Key Constraints for All Frontend Code
+### 10.3 Key Constraints for All Frontend Code
 
 - No global CSS — all styles scoped with `haizz-` prefix.
 - No `window`/`document` access during module evaluation (SSR-safe).
@@ -859,7 +753,7 @@ export default function TradingPage() {
 
 ---
 
-## 12. Definition of Done (Per Feature)
+## 11. Definition of Done (Per Feature)
 
 A feature is "done" when:
 
@@ -871,6 +765,7 @@ A feature is "done" when:
 - [ ] New/modified Kafka events are reflected in `exchange-common`.
 - [ ] The feature works end-to-end in docker-compose (if it spans multiple services).
 - [ ] Merged to `main`.
+- [ ] Sau khi merge `main`: cập nhật tiến độ — trạng thái SR + project status + todo list — để phản ánh phần vừa hoàn thành và backlog còn lại.
 
 ---
 

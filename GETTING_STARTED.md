@@ -2,15 +2,15 @@
 
 ## Yêu cầu
 
-| Tool           | Phiên bản |
-|----------------|-----------|
-| JDK            | 21        |
-| Maven          | 3.9.15    |
+| Tool           | Phiên bản           |
+|----------------|---------------------|
+| JDK            | 21                  |
+| Maven          | 3.9.15              |
 | Node.js        | ≥ 18 (cho frontend) |
-| Docker Desktop | 29.2.1    |
-| IDE            | VS Code   |
-| DB Client      | DBeaver   |
-| API Client     | Postman   |
+| Docker Desktop | 29.2.1              |
+| IDE            | VS Code             |
+| DB Client      | DBeaver             |
+| API Client     | Postman             |
 
 > Maven không cần cài riêng — dùng `mvnw` wrapper có sẵn trong từng service.
 
@@ -101,15 +101,60 @@ Script mở: **Auth (8081), Wallet (8082), Order (8083), Gateway (8080), MarketD
 
 > Toàn bộ luồng end-to-end đi qua **API Gateway `:8080`** (FE chỉ gọi `:8080`). Các bước chạy từng service bên dưới dành cho khi cần chạy/đdebug riêng lẻ.
 
-| Service | Port | Phụ thuộc khi khởi động |
-|---------|------|------------------------|
-| Auth | 8081 | postgres, kafka |
-| Wallet | 8082 | postgres, kafka (nghe `user.events.v1`, `trade.executed`) |
-| Order | 8083 | postgres (`order_db`), kafka, **Wallet** (freeze), **MarketData** (ticker cho MARKET) |
-| Matching | 8084 | postgres (`match_db`), kafka, **MarketData** (depth/health), **Order** (`/internal/orders` rebuild lúc start) |
-| MarketData | 8085 | timescale, redis, kafka, internet (Binance) |
-| Gateway | 8080 | redis, kafka; route tới các service trên |
-| Frontend | 3000 | Gateway `:8080` |
+| Service    | Port | Phụ thuộc khi khởi động                                                                                       |
+|------------|------|---------------------------------------------------------------------------------------------------------------|
+| Auth       | 8081 | postgres, kafka                                                                                               |
+| Wallet     | 8082 | postgres, kafka (nghe `user.events.v1`, `trade.executed`)                                                     |
+| Order      | 8083 | postgres (`order_db`), kafka, **Wallet** (freeze), **MarketData** (ticker cho MARKET)                         |
+| Matching   | 8084 | postgres (`match_db`), kafka, **MarketData** (depth/health), **Order** (`/internal/orders` rebuild lúc start) |
+| MarketData | 8085 | timescale, redis, kafka, internet (Binance)                                                                   |
+| Gateway    | 8080 | redis, kafka; route tới các service trên                                                                      |
+| Frontend   | 3000 | Gateway `:8080`                                                                                               |
+
+---
+
+## Spring Profiles & Cấu hình
+
+| Profile  | Khi nào dùng              | Đặc điểm                                                            |
+|----------|---------------------------|---------------------------------------------------------------------|
+| `dev`    | Chạy local, IDE           | DEBUG logging, `DataSeeder` enabled, H2 fallback nếu PG unreachable |
+| `docker` | Chạy trong docker-compose | Docker DNS cho service discovery (`kafka:9092`, `redis:6379`)       |
+| `prod`   | Production (tương lai)    | JSON-only logs, không dev endpoints, strict CORS                    |
+
+**Thứ tự ưu tiên cấu hình** (thấp → cao):
+
+1. Hard-coded defaults trong `@ConfigurationProperties`
+2. `application.yml` — baseline, committed
+3. `application-<profile>.yml` — theo profile, committed (không chứa secrets)
+4. Environment variables — inject bởi docker-compose
+5. `.env` file — gitignored, chứa secrets
+
+---
+
+## Dockerfile Template (Spring Boot services)
+
+```dockerfile
+# Multi-stage build
+FROM eclipse-temurin:21-jdk-jammy AS build
+WORKDIR /build
+
+# Copy parent POM + exchange-common first for caching
+COPY pom.xml ./pom.xml
+COPY exchange-common ./exchange-common
+RUN mvn -f exchange-common/pom.xml install -DskipTests
+
+# Copy service module
+COPY services/<service-name> ./services/<service-name>
+RUN mvn -f services/<service-name>/pom.xml package -DskipTests
+
+# Runtime image
+FROM eclipse-temurin:21-jre-jammy
+WORKDIR /app
+COPY --from=build /build/services/<service-name>/target/*.jar app.jar
+
+EXPOSE <port>
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
 
 ---
 

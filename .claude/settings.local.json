@@ -7,7 +7,26 @@
       "Bash(./mvnw -q -o compile)",
       "Bash(./mvnw compile *)",
       "Bash(./mvnw -f services/marketdata/pom.xml compile)",
-      "Bash(dir D:\\\\Project\\\\exchange\\\\services /b)"
+      "Bash(dir D:\\\\Project\\\\exchange\\\\services /b)",
+      "Bash(Get-ChildItem -Path services -Name -Directory)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Project\\\\exchange\\\\docs\" -File)",
+      "Bash(Select-Object Name)",
+      "PowerShell(tree /F D:\\\\Project\\\\exchange\\\\services\\\\wallet -L 3 2>$null)",
+      "PowerShell(head -100)",
+      "Bash(git ls-tree *)",
+      "Bash(xargs ls -la)",
+      "Bash(xargs grep -l \"supported\\\\|pair\")",
+      "Bash(grep -E \"pom.xml$\")",
+      "Bash(xargs grep -l \"InitializeWallets\")",
+      "Bash(xargs grep -l \"UserRegisteredEvent\")",
+      "Bash(xargs grep -l \"WalletClient\\\\|wallet\")",
+      "Bash(xargs grep -l \"UserRegistered\\\\|user.events\")",
+      "Bash(xargs grep -l \"OutboxRelay\\\\|@Scheduled\")",
+      "Bash(xargs grep -l \"freeze\\\\|wallet\")",
+      "Bash(xargs grep -l \"WalletNotFoundException\\\\|404\")",
+      "PowerShell(head -10)",
+      "PowerShell(head -20)",
+      "Bash(ls \"C:\\\\Users\\\\Haizz\\\\.claude\\\\plans\\\\\" 2>/dev/null || echo \"Directory does not exist\")"
     ]
   }
 }

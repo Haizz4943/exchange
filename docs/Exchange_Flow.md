@@ -1,21 +1,11 @@
-# Prompt cho Design AI — Flow Trading Thực Tế trên Sàn Crypto (Binance)
-
-> **Mục đích:** Dùng prompt này để AI vẽ diagram/infographic mô tả toàn bộ hành trình một trader thực hiện giao dịch crypto trên sàn thật (lấy Binance làm mẫu). Diagram cần thể hiện rõ các bước, các hệ thống tham gia, và luồng tiền/dữ liệu.
-
----
-
-## PROMPT
-
-Hãy vẽ một **system flow diagram / infographic** mô tả toàn bộ hành trình một trader giao dịch crypto trên sàn Binance, từ lúc đăng ký đến khi hoàn tất giao dịch và rút tiền. Diagram cần bao gồm tất cả các giai đoạn dưới đây, với các actor và hệ thống tham gia rõ ràng.
-
-### Các Actor chính:
+# Các Actor chính:
 - **Trader** (người dùng)
 - **Sàn giao dịch (Binance)** — bao gồm các hệ thống con bên trong
 - **Blockchain Network** (ví dụ: Bitcoin, Ethereum)
 - **Ngân hàng / Payment Gateway** (nạp fiat)
 - **KYC Provider** (xác minh danh tính)
 
-### Các giai đoạn cần thể hiện:
+# Các giai đoạn cần thể hiện:
 
 **① Đăng ký & Xác minh (Onboarding)**
 - Trader tạo tài khoản bằng email/số điện thoại
@@ -74,10 +64,3 @@ Hãy vẽ một **system flow diagram / infographic** mô tả toàn bộ hành 
 **⑧ Rút tiền (Withdrawal)**
 - **Rút crypto:** Trader nhập địa chỉ ví đích + số lượng → sàn xác minh (2FA, email confirm, whitelist check) → sàn tạo transaction trên Blockchain → chờ confirmations → hoàn tất
 - **Rút fiat:** Trader yêu cầu rút → sàn xử lý qua Payment Gateway → chuyển khoản ngân hàng → hoàn tất (thường mất 1-3 ngày)
-
-### Yêu cầu về diagram:
-- Dùng mũi tên có nhãn để chỉ luồng dữ liệu/tiền
-- Phân biệt rõ luồng **đồng bộ** (sync — HTTP request/response) và **bất đồng bộ** (async — event/message queue)
-- Highlight **Matching Engine** như thành phần trung tâm
-- Dùng màu sắc phân biệt: luồng tiền thật (xanh), luồng dữ liệu (xám), luồng xác minh/bảo mật (đỏ)
-- Style: clean, professional, phù hợp cho tài liệu kỹ thuật hoặc slide thuyết trình

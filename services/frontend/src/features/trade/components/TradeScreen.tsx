@@ -85,7 +85,7 @@ export function TradeScreen({ pair }: TradeScreenProps) {
       </div>
 
       {/* Bottom: Trades tape + Order form */}
-      <div className="hx-flex hx-border-t hx-border-gray-200 dark:hx-border-gray-800" style={{ height: 250 }}>
+      <div className="hx-flex hx-border-t hx-border-gray-200 dark:hx-border-gray-800" style={{ height: "40vh" }}>
         <div className="hx-flex-[6] hx-border-r hx-border-gray-200 dark:hx-border-gray-800 hx-overflow-hidden">
           <TradesTape pair={pair} />
         </div>

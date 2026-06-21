@@ -208,6 +208,7 @@ Key business-level capabilities:
 | R-008 | Scope creep from "just add VN stocks" or "just add margin" before MVP is stable | Medium | High | BRD explicitly defers both. Any change requires BRD revision. Track temptation, do not act on it. |
 | R-009 | External feed data quality (gaps, stale prices, incorrect values) causes visibly wrong user outcomes | Low | Medium | Basic sanity checks on incoming ticks (price jump thresholds, timestamp staleness). Log anomalies. Not critical to block on in MVP but should be tracked. |
 | R-010 | Kafka / PostgreSQL / Redis / TimescaleDB operational complexity overwhelms a solo dev | Medium | High | Use docker-compose for local dev. Keep infrastructure minimal in POC (single-node everything). Do not introduce Kubernetes, service mesh, etc. at MVP. |
+| R-011 | Wallet provisioning lost (BR-002): if the Wallet Service consumer is down — or misconfigured and not running — longer than Kafka topic retention (7 days), the `UserRegistered` event is deleted before wallets are created, leaving the user **permanently without wallets** (deposit/order/balance all fail). Already materialized in dev (a user registered before the consumer worked never got wallets). | Medium | High | Make provisioning recoverable independently of the event: idempotent **re-provision** lazily on first wallet access and/or a reconciliation pass (SR-024, SRS §8.6, appendix SR-W-005). Keep consumer downtime well under retention. |
 
 ---
 

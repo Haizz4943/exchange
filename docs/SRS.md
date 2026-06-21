@@ -183,12 +183,14 @@ Responsible service: **Wallet Service**. See `SRS_Appendix_WalletService.md` for
 | SR-021 | The system shall expose a read endpoint returning all wallets for the authenticated user with total/available/frozen per asset. | Learner | Must | BR-009 |
 | SR-022 | The system shall expose a read endpoint returning the authenticated user's wallet transaction history, paginated, sortable by timestamp. | Learner | Must | BR-010 |
 | SR-023 | The system shall handle concurrent balance mutations for the same wallet using optimistic locking with pessimistic-lock fallback on retry, never permitting a lost update. | System | Must | NFR-005 |
+| SR-024 | The system shall guarantee that a registered user is never permanently left without wallets. Wallet provisioning shall be recoverable via an **idempotent re-provision path** (lazy creation on first wallet access — read/deposit/withdraw/freeze — and/or a reconciliation pass), independent of `UserRegistered` event delivery or Kafka retention. A wallet operation for a user with no wallets shall never surface a misleading balance error. | System | Must | BR-002, NFR-005 |
 
 **US-010 (View Wallets):** As a learner, I want to see my balance for each asset so that I know what I can trade with.
 
 **Acceptance Criteria:**
 - Given the user is authenticated, when they GET `/api/v1/wallets/me`, then the response lists every wallet they own with `assetCode`, `total`, `available`, `frozen`, and `updatedAt`.
 - Given the user has a wallet with total=1.5 BTC and an open limit sell of 0.5 BTC, then the response shows BTC with total=1.5, available=1.0, frozen=0.5.
+- **(SR-024)** Given a registered user has **no wallet rows** (the `UserRegistered` event was lost/expired before the Wallet consumer ran), when they read wallets / deposit / place an order, then the system **re-provisions** their wallets idempotently (one per supported asset, USDT granted 10,000 exactly once) before serving the request — or, until re-provisioning is implemented, returns the documented `WALLET_NOT_FOUND` (404) rather than a misleading balance error. The user must never be permanently stuck unprovisioned.
 
 **US-011 (Deposit USDT):** As a learner, I want to deposit additional simulated USDT so that I can try different position sizes.
 
@@ -395,7 +397,7 @@ Cross-service entity ownership follows DDD bounded-context principles. An entity
 | Candlestick (OHLCV) data | 1m candles: 90 days. 5m/15m/1h: 1 year. 4h/1d: indefinite. Older 1m data downsampled to higher resolutions if needed. |
 | Session tokens (Redis) | Access token: 60 min TTL. Refresh token: 7 days TTL. |
 | Order book depth snapshot (Redis) | TTL 30 seconds; refreshed on every WebSocket tick. |
-| Kafka events | 7 days retention on all topics (MVP default; adequate for replay/debug). |
+| Kafka events | 7 days retention on all topics (MVP default; adequate for replay/debug). **This retention must not break the "every user has wallets" invariant (SR-010/SR-024): if a consumer is down longer than retention, the lost `UserRegistered` event must be recoverable via idempotent re-provisioning, not abandoned.** |
 
 ---
 
@@ -565,6 +567,13 @@ All endpoints validate input at boundary (controller layer) using Bean Validatio
 | Trading pair count | 5 in MVP, expandable via config | N/A |
 | Historical candle query range | Max 1,000 candles per request | HTTP 400 `RANGE_TOO_LARGE`; client paginates |
 
+### 8.6 Registered User Without Provisioned Wallets
+
+- **Scenario:** A user exists in the User & Auth Service but has **no wallet rows** in the Wallet Service. This happens when the `UserRegistered` event is never consumed within Kafka's retention window — e.g. the Wallet Service consumer is down (or misconfigured and not running) longer than the 7-day topic retention (§4.4), so the event is permanently deleted before provisioning runs. Provisioning is event-driven only (SR-010/011), so once the event is gone there is no automatic recovery.
+- **Symptoms (without mitigation):** `GET /wallets/me` returns an empty list (frontend shows an "account being set up" state indefinitely); `POST /deposits` and `POST /withdrawals` fail with `WALLET_NOT_FOUND` (404); order placement calls Wallet `freeze`, gets 404, and the Order Service must surface a clear cause — **not** a misleading `INSUFFICIENT_AVAILABLE_BALANCE`.
+- **Required behavior (SR-024):** The system shall recover via **idempotent re-provisioning** — lazily on first wallet access (read/deposit/withdraw/freeze) and/or a reconciliation pass that detects users with no wallets and provisions them (one wallet per supported asset, USDT 10,000 granted exactly once, keyed by `userId`). Re-provisioning must be safe to run repeatedly. Until implemented, the contract is to return `WALLET_NOT_FOUND` (404) on the affected wallet operations and a non-misleading rejection on order placement.
+- **Operational note:** Keep the Wallet Service consumer running with downtime well under the topic retention. Re-provisioning makes the system self-healing regardless.
+
 ---
 
 ## 9. State Diagrams
@@ -620,7 +629,7 @@ Same pattern as deposit — instant-confirmed in MVP.
 | BRD ID | SRS Requirements | BRD Priority |
 |--------|-----------------|--------------|
 | BR-001 | SR-001, SR-002, SR-003, SR-004, SR-005, SR-007 | Must |
-| BR-002 | SR-010, SR-011 | Must |
+| BR-002 | SR-010, SR-011, SR-024 | Must |
 | BR-003 | SR-013, SR-014, SR-015, SR-016, SR-017, SR-018 | Must |
 | BR-004 | SR-030, SR-033, SR-036, SR-040, SR-042, SR-050, SR-051, SR-052, SR-065 | Must |
 | BR-005 | SR-031, SR-032, SR-033, SR-036, SR-040, SR-042, SR-050, SR-053, SR-054, SR-065 | Must |

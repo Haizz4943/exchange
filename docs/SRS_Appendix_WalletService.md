@@ -153,6 +153,11 @@ Same shape as `DepositRecord`, with `depositId → withdrawalId`. All assets are
 - When Wallet Service re-consumes `user.registered(userId=U1)` (e.g., Kafka redelivery).
 - Then no new rows are created (the unique constraint on `(userId, assetCode)` rejects the insert; service catches the constraint violation and logs INFO "duplicate user.registered, ignoring"). The consumer commits the offset.
 
+**SR-W-005 (provisioning resilience — traces SR-024):** The idempotent replay above is only safe **while the event is still on the topic** (Kafka retention, 7 days — SRS §4.4). If the Wallet consumer is down (or not yet running) longer than retention, the `UserRegistered` event is deleted and the user is left with **no wallets** — provisioning will never fire from the event again. To honor "every user has wallets" (SR-010/SR-011), provisioning must be **recoverable independently of the event**:
+- **Lazy provision:** on first wallet access for a user with no wallet rows (read `GET /wallets/me`, deposit, withdraw, or internal `freeze`/`balance`), create the full wallet set idempotently (keyed by `userId`, USDT granted exactly once) before serving the request.
+- **and/or Reconciliation:** a periodic pass that finds users (from Auth) with no wallets and provisions them.
+- Both paths reuse the same idempotent initialization as the consumer (unique `(userId, assetCode)` + single `SIGNUP_GRANT`), so they are safe to run repeatedly and concurrently with a late event redelivery. Until implemented, the affected operations return `WALLET_NOT_FOUND` (404) — never a misleading balance error (see SRS §8.6).
+
 ### 3.2 Simulated Deposit (USDT-Only)
 
 **SR-W-010:** `POST /api/v1/deposits` — authenticated endpoint for users.
@@ -500,7 +505,7 @@ Response: standard paginated JSON with transactions sorted by `createdAt` DESC.
 | `DEPOSIT_AMOUNT_EXCEEDS_LIMIT` | 400 | Deposit amount > 100,000 USDT |
 | `DEPOSIT_ASSET_NOT_SUPPORTED` | 400 | Deposit asset != USDT |
 | `WITHDRAWAL_ASSET_NOT_SUPPORTED` | 400 | Withdrawal asset not in catalog |
-| `WALLET_NOT_FOUND` | 404 | Trying to operate on a non-existent wallet (should not happen for authenticated users with standard assets) |
+| `WALLET_NOT_FOUND` | 404 | The user has no wallet for the asset. This **can** happen for an authenticated user when provisioning was lost (the `UserRegistered` event expired from Kafka before the consumer ran — see SR-W-005, SRS §8.6). It is **recoverable**: the system re-provisions idempotently (SR-024), so this is a transient fallback, not a dead end. |
 | `FREEZE_CONFLICT` | 409 | Same referenceId with different amount |
 | `CONCURRENT_MODIFICATION` | 409 | Optimistic lock failed after all retries |
 | `INVALID_AMOUNT_PRECISION` | 400 | Amount has more decimals than asset allows |

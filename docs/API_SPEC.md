@@ -353,6 +353,7 @@ Auth: Bearer
 | `UNSUPPORTED_DEPOSIT_ASSET` | 400 | Only USDT allowed in MVP |
 | `INVALID_AMOUNT` | 400 | Amount ≤ 0 or > 100,000 |
 | `DUPLICATE_REQUEST` | 409 | Same `clientRequestId` within 60s |
+| `WALLET_NOT_FOUND` | 404 | The user has no wallet for the asset — provisioning was lost/never ran (see SRS §8.6, SR-024). The system should re-provision idempotently; this code is the fallback until that is implemented. |
 
 ---
 
@@ -402,6 +403,7 @@ Auth: Bearer
 | `UNSUPPORTED_ASSET` | 400 | Asset not in catalog |
 | `INVALID_AMOUNT` | 400 | Amount ≤ 0 |
 | `DUPLICATE_REQUEST` | 409 | Same `clientRequestId` within 60s |
+| `WALLET_NOT_FOUND` | 404 | The user has no wallet for the asset — provisioning was lost/never ran (see SRS §8.6, SR-024). Re-provision idempotently; fallback until implemented. |
 
 ---
 
@@ -573,7 +575,8 @@ Auth: Bearer
 | `INVALID_ORDER_TYPE` | 400 | Type not MARKET/LIMIT |
 | `LIMIT_PRICE_REQUIRED` | 400 | Limit order without `limit_price` |
 | `LIMIT_PRICE_NOT_ALLOWED` | 400 | Market order with `limit_price` |
-| `INSUFFICIENT_AVAILABLE_BALANCE` | 400 | Wallet freeze failed |
+| `INSUFFICIENT_AVAILABLE_BALANCE` | 400 | Available balance < required freeze (a genuine balance shortfall). **Must NOT** be used when the wallet does not exist — see `WALLET_NOT_FOUND`. |
+| `WALLET_NOT_FOUND` | 404 | Wallet `freeze` returned 404 because the user has no wallet for the asset (provisioning lost/never ran — SRS §8.6, SR-024). The Order Service must surface this distinctly, not as `INSUFFICIENT_AVAILABLE_BALANCE`; the user should be re-provisioned, not told they lack balance. |
 | `MAX_OPEN_ORDERS_EXCEEDED` | 400 | ≥ 100 open orders on this pair |
 | `DUPLICATE_CLIENT_ORDER_ID` | 409 | Same `client_order_id` used within 24h |
 | `MARKET_DATA_UNAVAILABLE` | 503 | Pair feed degraded > 10s |

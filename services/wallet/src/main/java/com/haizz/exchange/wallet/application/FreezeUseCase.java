@@ -31,10 +31,15 @@ public class FreezeUseCase {
     private final WalletTransactionRepository walletTransactionRepository;
     private final WalletEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
+    private final InitializeWalletsUseCase initializeWalletsUseCase;
 
     public record Result(Wallet wallet) {}
 
     public Result execute(UUID userId, String assetCode, BigDecimal amount, String referenceId) {
+        // Lazy provisioning (SR-024): self-heal a user whose user.registered event was lost.
+        // Done once, before the optimistic-retry loop (its own REQUIRES_NEW transaction).
+        initializeWalletsUseCase.provisionIfMissing(userId);
+
         for (int attempt = 0; attempt <= MAX_OPTIMISTIC_RETRIES; attempt++) {
             final boolean usePessimistic = (attempt == MAX_OPTIMISTIC_RETRIES);
             try {

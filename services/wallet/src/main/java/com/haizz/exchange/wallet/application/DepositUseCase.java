@@ -28,6 +28,7 @@ public class DepositUseCase {
     private final WalletTransactionRepository walletTransactionRepository;
     private final DepositRecordRepository depositRecordRepository;
     private final WalletEventPublisher eventPublisher;
+    private final InitializeWalletsUseCase initializeWalletsUseCase;
 
     public record Result(DepositRecord depositRecord, Wallet wallet) {}
 
@@ -36,6 +37,9 @@ public class DepositUseCase {
         if (!USDT.equalsIgnoreCase(assetCode)) {
             throw new DepositAssetNotSupportedException();
         }
+
+        // Lazy provisioning (SR-024): self-heal a user whose user.registered event was lost.
+        initializeWalletsUseCase.provisionIfMissing(userId);
 
         if (amount.compareTo(MAX_DEPOSIT) > 0) {
             throw new DepositAmountExceedsLimitException(MAX_DEPOSIT);

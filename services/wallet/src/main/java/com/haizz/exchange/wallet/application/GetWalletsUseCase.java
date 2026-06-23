@@ -14,9 +14,12 @@ import java.util.UUID;
 public class GetWalletsUseCase {
 
     private final WalletRepository walletRepository;
+    private final InitializeWalletsUseCase initializeWalletsUseCase;
 
     @Transactional(readOnly = true)
     public List<Wallet> execute(UUID userId) {
+        // Lazy provisioning (SR-024): self-heal a user whose user.registered event was lost.
+        initializeWalletsUseCase.provisionIfMissing(userId);
         return walletRepository.findByUserId(userId);
     }
 }

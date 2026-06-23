@@ -25,11 +25,15 @@ public class WithdrawUseCase {
     private final WalletTransactionRepository walletTransactionRepository;
     private final WithdrawalRecordRepository withdrawalRecordRepository;
     private final WalletEventPublisher eventPublisher;
+    private final InitializeWalletsUseCase initializeWalletsUseCase;
 
     public record Result(WithdrawalRecord withdrawalRecord, Wallet wallet) {}
 
     @Transactional
     public Result execute(UUID userId, String assetCode, BigDecimal amount, String clientRequestId) {
+        // Lazy provisioning (SR-024): self-heal a user whose user.registered event was lost.
+        initializeWalletsUseCase.provisionIfMissing(userId);
+
         // Idempotency check
         Instant since = Instant.now().minusSeconds(IDEMPOTENCY_WINDOW_SECONDS);
         var existing = withdrawalRecordRepository.findByIdempotencyKey(userId, clientRequestId, since);

@@ -1,10 +1,8 @@
 package com.haizz.exchange.marketdata.application.ingestion;
 
-import com.haizz.exchange.common.event.market.ExternalTradeObservedEvent;
-import com.haizz.exchange.common.kafka.TopicNames;
 import com.haizz.exchange.marketdata.domain.TradeObservation;
 import com.haizz.exchange.marketdata.infrastructure.cache.HealthRedisRepository;
-import com.haizz.exchange.marketdata.infrastructure.outbox.MarketDataOutbox;
+import com.haizz.exchange.marketdata.infrastructure.messaging.producer.MarketDataEventPublisher;
 import com.haizz.exchange.marketdata.infrastructure.provider.MarketDataProvider;
 import com.haizz.exchange.marketdata.shared.Constants;
 import com.haizz.exchange.marketdata.shared.SupportedPairs;
@@ -23,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TradeIngestionService {
 
     private final MarketDataProvider provider;
-    private final MarketDataOutbox outbox;
+    private final MarketDataEventPublisher eventPublisher;
     private final HealthRedisRepository health;
     private final SupportedPairs supportedPairs;
 
@@ -46,16 +44,9 @@ public class TradeIngestionService {
         return Mono.fromRunnable(() -> {
             checkPriceSanity(obs);
             health.recordTrade(obs.pair(), obs.observedAt());
-            var event = new ExternalTradeObservedEvent(
-                    obs.pair().value(),
-                    obs.price(),
-                    obs.quantity(),
-                    obs.buyerIsMaker(),
-                    obs.externalTradeId(),
-                    obs.observedAt()
-            );
-            outbox.write("ExternalTradeObservedEvent", TopicNames.MARKET_DATA_EVENTS,
-                    obs.pair().value(), event);
+            // External trades are ephemeral market data: publish directly (best-effort) instead
+            // of through the durable outbox, which otherwise becomes an unbounded backlog firehose.
+            eventPublisher.publishExternalTrade(obs);
         }).subscribeOn(Schedulers.boundedElastic()).then();
     }
 

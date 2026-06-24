@@ -66,5 +66,6 @@
 
 ## Done
 
+- [x] **TASK-041 — Market Data: publish `ExternalTradeObserved` thẳng qua ephemeral, bỏ khỏi durable outbox** - (why: bug — outbox bền vững nhận firehose trade Binance full-rate, relay đồng bộ ~58 msg/s không kịp → backlog phình vô hạn (8,4M dòng, trễ ~6 ngày) → matching khớp giá CŨ, open order không match đúng giá. Fix: trade là market-data phù du như depth/kline → publish thẳng `ephemeralKafkaTemplate`, giữ wrapper `EventEnvelope`; feed-health vẫn qua outbox. Deviation SRS đã ghi [DECISIONS](services/marketdata/DECISIONS.md)). E2E verified: outbox không tích trade, Kafka nhận trade tươi ~473/s; đặt BUY LIMIT marketable → FILLED ở giá live (avg 59715.99)
 - [x] **TASK-005 — Lazy provisioning ví khi truy cập lần đầu mà chưa có** - SR-024. `provisionIfMissing(userId)` idempotent (REQUIRES_NEW) gọi ở read `GET /wallets/me` + deposit + withdraw + internal freeze/balance, tái dùng init của consumer. E2E verified: vào ví + nạp tiền OK
   - Acceptance: [§3.1](docs/SRS_Appendix_WalletService.md#31-wallet-initialization-on-registration) — thay vì trả `WALLET_NOT_FOUND` vĩnh viễn khi event hết retention

@@ -13,7 +13,7 @@
 
 This is the bridge between System Design and code. It tells you **what to build first**, **how to organize it**, and **what conventions to follow**. It does not repeat architecture rationale (see `SystemDesign.md`) or requirements (see `SRS.md`).
 
-Reading order: §1 (repo layout) → §2 (coding standards) → §3 (implementation roadmap) → build. Cài đặt môi trường dev xem [`GETTING_STARTED.md`](../GETTING_STARTED.md).
+Reading order: §1 (repo layout) → §2 (coding standards) → §3 (implementation roadmap) → build. Cài đặt môi trường dev xem [`GETTING_STARTED.md`](../GETTING_STARTED.md). Khái niệm event-driven (outbox, backlog, Kafka consumer/lag) & cách tự chẩn đoán "event không tới" xem [`GLOSSARY.md`](GLOSSARY.md).
 
 ---
 

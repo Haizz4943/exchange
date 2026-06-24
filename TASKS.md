@@ -21,6 +21,7 @@
 
 ## Waiting On
 
+- [ ] **TASK-041 — Market Data: publish `ExternalTradeObserved` thẳng qua ephemeral, bỏ khỏi durable outbox** 🧪 - (why: bug — outbox bền vững nhận firehose trade Binance full-rate, relay đồng bộ ~58 msg/s không kịp → backlog phình vô hạn (8,4M dòng, trễ ~6 ngày) → matching khớp giá CŨ, open order không match đúng giá. Fix: trade là market-data phù du như depth/kline → publish thẳng `ephemeralKafkaTemplate`, giữ wrapper `EventEnvelope`; feed-health vẫn qua outbox. Deviation SRS đã ghi [DECISIONS](services/marketdata/DECISIONS.md)). Verified ở mức marketdata (outbox không tích trade, Kafka nhận trade tươi ~473/s); 🧪 chờ E2E full order→fill qua gateway với code mới
 - [ ] **TASK-001 — Consume `user.registered`, tạo 1 ví mỗi asset từ catalog** 🧪 - SR-010
   - Acceptance: [§3.1](docs/SRS_Appendix_WalletService.md#31-wallet-initialization-on-registration) happy — 6 ví (USDT/BTC/ETH/BNB/SOL/XRP)
 - [ ] **TASK-002 — Grant 10.000 USDT cho ví USDT, các ví khác = 0** 🧪 - SR-011

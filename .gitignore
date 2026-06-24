@@ -9,6 +9,7 @@ target/
 *.war
 *.ear
 spring-shell.log
+restart.log
 
 # ── IDE ──────────────────────────────────────────────────────
 .idea/

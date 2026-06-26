@@ -90,6 +90,15 @@ market:
     degraded-event-threshold-ms: 30000
   exchange-info:
     refresh-interval-ms: 86400000
+  kafka:
+    # market-data.events.v1 is a high-rate ephemeral firehose (best-effort external trades).
+    # Bound its on-disk size with a short retention so it never grows unbounded. segment.ms is
+    # also short so closed segments roll quickly and retention.ms can actually reclaim them.
+    events-topic:
+      partitions: 1
+      replication-factor: 1
+      retention-ms: 600000      # 10 min
+      segment-ms: 60000         # 1 min — let retention kick in promptly
 
 binance:
   rest:

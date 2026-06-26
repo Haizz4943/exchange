@@ -10,6 +10,7 @@ target/
 *.ear
 spring-shell.log
 restart.log
+restart.err.log
 *-verify.log
 *-verify.err.log
 

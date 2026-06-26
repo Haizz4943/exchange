@@ -6,6 +6,29 @@ This file records judgment calls made while scaffolding the Order Service (Phase
 that are NOT explicitly dictated by an existing spec. Review and back-port into the
 official docs (SRS / System Design / API_SPEC) as appropriate.
 
+## 2026-06-25 — NEW → OPEN self-transition wired in the outbox relay (publish-ack)
+**Status:** 🟡 Pending review
+**Decision:** The `NEW → OPEN` transition is performed in `OrderOutboxRelay.relay()` immediately
+after a successful Kafka publish of an `OrderPlaced` event: the relay loads the aggregate and, only
+if it is still `NEW`, calls `order.markOpen()` + saves — all inside the relay's existing
+`@Transactional` so `markPublished` and `markOpen` commit atomically. Guarded to skip any non-`NEW`
+state (e.g. a user cancel that landed in the ~100 ms window → `CANCEL_REQUESTED`, or an already-`OPEN`
+re-relay) so `markOpen()` never throws. Only `OrderPlaced` triggers it, not `OrderCancelled`.
+**Why:** `SRS_Appendix_OrderService §5` defines `NEW → OPEN` as a Order-service "self-transition on
+publish ack" and `SR-ORDER-EDGE-006` says the order stays `NEW` until publish succeeds — but this
+transition was never implemented (`Order.markOpen()` was dead code, called only in tests). The result
+was a correctness bug: passive LIMIT orders stayed `NEW` forever, so the internal open-orders
+projection (default `OPEN,PARTIALLY_FILLED`) never returned them and the Matching Engine's
+`IndexRebuildService` dropped them from the book on restart (`loaded=0`). The spec located the
+transition at publish-ack precisely (not at persist time), so the relay — which owns the publish — is
+the correct seam; doing it at persist would contradict SR-ORDER-EDGE-006 (FE shows `NEW`/"queued"
+while Kafka is down).
+**Where:** `services/order/.../infrastructure/outbox/OrderOutboxRelay.java` (`relay`, `markOrderOpen`);
+test `OrderOutboxRelayTest`.
+**Suggested doc:** SRS_Appendix_OrderService §5 — note the implementation seam (outbox relay,
+post-publish, same tx) and the guard semantics (only from `NEW`; non-`NEW` skipped silently). No
+behavioural change to the documented state machine; this closes a gap, not a deviation.
+
 ## Phase 1 — Scaffold
 
 ### Database name

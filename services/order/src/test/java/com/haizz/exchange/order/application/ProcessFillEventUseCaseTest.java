@@ -46,7 +46,7 @@ class ProcessFillEventUseCaseTest {
     private static FillResult applied(OrderSide side, String freeze, String asset,
                                       String filled, String avg) {
         return new FillResult(Outcome.APPLIED, UUID.randomUUID(), side,
-                bd(freeze), asset, bd(filled), avg == null ? null : bd(avg));
+                bd(freeze), asset, bd(filled), avg == null ? null : bd(avg), false);
     }
 
     private static BigDecimal bd(String s) {
@@ -77,7 +77,7 @@ class ProcessFillEventUseCaseTest {
                 bd("0.04"), bd("0.06"), bd("55000"), Instant.now());
         when(fillPersister.applyPartial(any(), any(), any()))
                 .thenReturn(new FillResult(Outcome.SKIPPED, userId, OrderSide.BUY,
-                        bd("5505.5"), "USDT", bd("0.04"), bd("55000")));
+                        bd("5505.5"), "USDT", bd("0.04"), bd("55000"), false));
 
         useCase.onPartiallyFilled(event);
 
@@ -112,7 +112,7 @@ class ProcessFillEventUseCaseTest {
                 bd("0.10"), bd("55000"), Instant.now());
         when(fillPersister.complete(any(), any(), any()))
                 .thenReturn(new FillResult(Outcome.SKIPPED, userId, OrderSide.BUY,
-                        bd("5505.5"), "USDT", bd("0.10"), bd("55000")));
+                        bd("5505.5"), "USDT", bd("0.10"), bd("55000"), false));
 
         useCase.onFilled(event);
 
@@ -139,7 +139,7 @@ class ProcessFillEventUseCaseTest {
         var event = new OrderFilledEvent(orderId, userId, "BTCUSDT",
                 bd("0.10"), bd("55000"), Instant.now());
         when(fillPersister.complete(any(), any(), any()))
-                .thenReturn(new FillResult(Outcome.MISSING, null, null, null, null, null, null));
+                .thenReturn(new FillResult(Outcome.MISSING, null, null, null, null, null, null, false));
 
         useCase.onFilled(event);
 
@@ -204,7 +204,7 @@ class ProcessFillEventUseCaseTest {
         var event = new OrderCancelledEvent(orderId, userId, "BTCUSDT", "REJECTED", Instant.now());
         when(fillPersister.cancel(orderId))
                 .thenReturn(new FillResult(Outcome.SKIPPED, userId, OrderSide.BUY,
-                        bd("5505.5"), "USDT", bd("0"), null));
+                        bd("5505.5"), "USDT", bd("0"), null, false));
 
         useCase.onCancelled(event);
 

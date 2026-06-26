@@ -1,12 +1,18 @@
 package com.haizz.exchange.marketdata.config;
 
+import com.haizz.exchange.common.kafka.TopicNames;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 
@@ -15,6 +21,50 @@ import java.util.Map;
 
 @Configuration
 public class KafkaConfig {
+
+    @Value("${market.kafka.events-topic.partitions:1}")
+    private int eventsTopicPartitions;
+
+    @Value("${market.kafka.events-topic.replication-factor:1}")
+    private short eventsTopicReplicationFactor;
+
+    @Value("${market.kafka.events-topic.retention-ms:600000}")
+    private long eventsTopicRetentionMs;
+
+    @Value("${market.kafka.events-topic.segment-ms:60000}")
+    private long eventsTopicSegmentMs;
+
+    /**
+     * KafkaAdmin owned by the producer of {@code market-data.events.v1}. {@code modifyTopicConfigs}
+     * is enabled so the short retention below is also applied to the EXISTING topic (which Kafka
+     * auto-created with the broker default 7-day retention), not only on first creation.
+     */
+    @Bean
+    public KafkaAdmin kafkaAdmin(KafkaProperties kafkaProperties) {
+        Map<String, Object> props = new HashMap<>();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaProperties.getBootstrapServers());
+        KafkaAdmin admin = new KafkaAdmin(props);
+        admin.setModifyTopicConfigs(true);
+        return admin;
+    }
+
+    /**
+     * Declares {@code market-data.events.v1} with a short retention. It is a high-rate ephemeral
+     * firehose (best-effort external trades, bypassing the durable outbox), so it must not grow
+     * unbounded. The matching consumer additionally seeks-to-end on start, so it never depends on
+     * this backlog anyway. {@code segment.ms} is short so segments roll and retention reclaims them
+     * promptly.
+     */
+    @Bean
+    public org.apache.kafka.clients.admin.NewTopic marketDataEventsTopic() {
+        return TopicBuilder.name(TopicNames.MARKET_DATA_EVENTS)
+                .partitions(eventsTopicPartitions)
+                .replicas(eventsTopicReplicationFactor)
+                .config(TopicConfig.RETENTION_MS_CONFIG, Long.toString(eventsTopicRetentionMs))
+                .config(TopicConfig.SEGMENT_MS_CONFIG, Long.toString(eventsTopicSegmentMs))
+                .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_DELETE)
+                .build();
+    }
 
     @Bean
     public ProducerFactory<String, String> durableProducerFactory(KafkaProperties kafkaProperties) {

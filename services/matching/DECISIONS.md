@@ -5,6 +5,80 @@
 Per-service log of judgment calls not dictated by the specs (SRS / System Design /
 API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 
+## 2026-06-25 — Market-data listener seeks-to-end on startup; short retention on the topic
+
+**Status:** 🟡 Pending review
+
+**Problem.** `market-data.events.v1` is a high-rate **ephemeral firehose** of
+`ExternalTradeObservedEvent` (the producer bypasses the durable outbox on purpose — see
+`MarketDataEventPublisher`). It had **no retention** (broker default, ~7d) and had grown to
+**~13.5M records**. Because the `matching-engine` group commits offsets on this topic, a
+matching restart or any lag made the consumer **resume from the committed offset and replay
+millions of stale external trades at obsolete prices** — matching then filled resting orders
+at wrong prices, and it took ~98 min (measured: lag ~2M, net drain ~349/s) to catch up to
+live. The standing workaround was a manual seek-to-latest.
+
+**Why replaying old external trades is always wrong (not just slow).** External trades are
+**best-effort and non-retroactive**: `MatchDispatcher.onExternalTrade` / `LimitOrderMatcher`
+only ever apply a trade against the book *as it is at consumption time* (no historical fill,
+no replay semantics). An external trade from an hour ago carries an obsolete price and has no
+correct effect on the current book — it can only cause mis-priced fills. So the backlog has
+**zero** value to matching; the only correct behavior after a gap is to resume at live.
+
+**Decision (combined fix).**
+
+1. **Matching: seek-to-end on partition assignment (primary).**
+   `MarketDataEventsConsumer` now extends `AbstractConsumerSeekAware` and, in
+   `onPartitionsAssigned`, calls `callback.seekToEnd(assignedPartitions)`. On every (re)assignment
+   the market-data partitions jump to the log end, discarding the backlog and processing only
+   live trades. Toggle: `matching.kafka.market-data-seek-to-end-on-start` (default `true`).
+   - **Scoped to this listener only.** `OrderEventsConsumer` (`orders.events.v1`) and the
+     matching outbox/`matching.events.v1` path do **not** implement `ConsumerSeekAware`, so they
+     keep their committed-offset, ordered, replayable semantics **untouched**. Each `@KafkaListener`
+     is its own consumer/container within the `matching-engine` group, so the seek affects only
+     market-data partitions — order/matching ordering is unaffected.
+
+2. **Market-data: short retention on `market-data.events.v1` (complementary, bounds disk).**
+   Added a `KafkaAdmin` (with `modifyTopicConfigs(true)`) + a `NewTopic` in market-data's
+   `KafkaConfig`, declaring `retention.ms=600000` (10 min) and `segment.ms=60000` (1 min, so
+   closed segments roll quickly and retention can actually reclaim them). `modifyTopicConfigs`
+   ensures the config is applied to the **already-existing** auto-created topic, not just on
+   first creation. Configurable under `market.kafka.events-topic.*`.
+
+Seek-to-end alone fixes correctness (matching never depends on the backlog); retention is
+defense-in-depth that stops the firehose from growing unbounded on disk.
+
+**Trade-off accepted — feed-health/metadata events ride the same topic.**
+`market-data.events.v1` also carries low-rate, edge-triggered `MarketDataFeedDegraded/Recovered`
+(consumed → `FeedStatusRegistry`) and `PairMetadataUpdatedEvent` (ignored by matching). Seeking
+to end skips their backlog too, so on restart matching boots with `FeedStatusRegistry` at its
+default **HEALTHY/fail-open** state and re-derives feed status only from the *next* transition.
+This is acceptable because (a) it is identical to matching's existing **cold-start** posture
+(no feed events yet ⇒ HEALTHY), (b) `FeedStatusRegistry` is fail-open by design, and (c) it
+matches the behavior of the manual seek-to-latest workaround this replaces. *Follow-up
+(not done here):* matching could bootstrap current feed status from market-data's health REST
+endpoint at startup to close the brief degraded-at-boot window.
+
+**Out of scope (noted).** The **gateway** `KafkaFanoutConsumer` also consumes this topic (FE
+fan-out) and has the same replay-on-restart symptom (it would flood the FE with stale trades);
+the short retention partially bounds that, but a gateway-side seek-to-end is a separate change.
+
+**Verified (E2E, 2026-06-25).** Stopped matching; reset the `matching-engine` group's
+market-data offset to earliest → **LAG ≈ 10.9M**, `orders.events.v1` LAG 0. Started the new
+build → log `seeking 1 partition(s) to end on assignment`; market-data `CURRENT-OFFSET` jumped
+straight to `LOG-END` (**LAG 0**, no drain), then tracked live (~500 lag from the active feed);
+`orders.events.v1` stayed at offset 13 (untouched). Restarted market-data → topic now reports
+`retention.ms=600000, segment.ms=60000`. Unit test: `MarketDataEventsConsumerSeekTest` (3 tests).
+
+**Where:** `services/matching/.../infrastructure/kafka/MarketDataEventsConsumer.java`,
+`services/matching/src/main/resources/application.yml`,
+`services/marketdata/.../config/KafkaConfig.java`,
+`services/marketdata/src/main/resources/application.yml`.
+
+**Suggested doc:** SystemDesign (Matching/Market-Data) — record that `market-data.events.v1` is
+an ephemeral, short-retention firehose and that consumers of external trades must process live
+only (seek-to-end), never replay.
+
 ## 2026-06-18 — Added `application-dev.yml` with shared dev JWT secret (E2E fix)
 **Status:** 🟡 Pending review
 **Decision:** Created `src/main/resources/application-dev.yml` setting

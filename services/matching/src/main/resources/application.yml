@@ -48,6 +48,10 @@ matching:
     market-data-events-topic: market-data.events.v1
     matching-events-topic: matching.events.v1
     trade-executed-topic: trade.executed
+    # External trades are best-effort & non-retroactive: on (re)assignment the market-data
+    # listener seeks to the log end so a restart/lag never replays stale trades at obsolete
+    # prices. Does NOT affect orders/matching topics (they keep committed-offset ordering).
+    market-data-seek-to-end-on-start: true
   outbox:
     relay-fixed-delay-ms: 100
     relay-batch-size: 100

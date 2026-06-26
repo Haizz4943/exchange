@@ -9,26 +9,67 @@ import com.haizz.exchange.common.event.market.MarketDataFeedRecoveredEvent;
 import com.haizz.exchange.matching.application.MatchDispatcher;
 import com.haizz.exchange.matching.domain.FeedStatusRegistry;
 import com.haizz.exchange.matching.infrastructure.index.PairExecutorRegistry;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.listener.AbstractConsumerSeekAware;
 import org.springframework.stereotype.Component;
+
+import java.util.Map;
 
 /**
  * Consumes {@code market-data.events.v1} ({@link EventEnvelope}-wrapped). External trades
- * are dispatched onto the pair executor to drive (phase-3) matching; feed-health events
- * update the {@link FeedStatusRegistry}.
+ * are dispatched onto the pair executor to drive matching; feed-health events update the
+ * {@link FeedStatusRegistry}.
+ *
+ * <p><b>Seek-to-end on assignment.</b> External trades are best-effort and non-retroactive
+ * (see {@link MatchDispatcher}/{@code LimitOrderMatcher}): a trade is only ever applied
+ * against the book <i>as it is now</i>. Resuming from the committed offset after a restart or
+ * lag means replaying millions of stale external trades at obsolete prices, which makes
+ * matching fill orders at wrong prices and can take ~98 min to catch up to live. So on every
+ * partition assignment this listener seeks its market-data partitions to the end, discarding
+ * the backlog and processing only live trades. This is scoped to THIS listener only — the
+ * {@code orders.events.v1} / {@code matching.events.v1} listeners do not implement
+ * {@link AbstractConsumerSeekAware} and keep their committed-offset (ordered, replayable)
+ * semantics untouched. Toggle via {@code matching.kafka.market-data-seek-to-end-on-start}.
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class MarketDataEventsConsumer {
+public class MarketDataEventsConsumer extends AbstractConsumerSeekAware {
 
     private final ObjectMapper objectMapper;
     private final PairExecutorRegistry pairExecutorRegistry;
     private final MatchDispatcher matchDispatcher;
     private final FeedStatusRegistry feedStatusRegistry;
+
+    @Value("${matching.kafka.market-data-seek-to-end-on-start:true}")
+    private boolean seekToEndOnStart;
+
+    public MarketDataEventsConsumer(ObjectMapper objectMapper,
+                                    PairExecutorRegistry pairExecutorRegistry,
+                                    MatchDispatcher matchDispatcher,
+                                    FeedStatusRegistry feedStatusRegistry) {
+        this.objectMapper = objectMapper;
+        this.pairExecutorRegistry = pairExecutorRegistry;
+        this.matchDispatcher = matchDispatcher;
+        this.feedStatusRegistry = feedStatusRegistry;
+    }
+
+    /**
+     * On (re)assignment of market-data partitions, jump to the log end so the firehose backlog
+     * of stale external trades is skipped and matching only ever sees live prices.
+     */
+    @Override
+    public void onPartitionsAssigned(Map<TopicPartition, Long> assignments, ConsumerSeekCallback callback) {
+        super.onPartitionsAssigned(assignments, callback);
+        if (seekToEndOnStart && !assignments.isEmpty()) {
+            callback.seekToEnd(assignments.keySet());
+            log.info("market-data listener: seeking {} partition(s) to end on assignment — "
+                    + "skipping stale external-trade backlog, matching from live", assignments.size());
+        }
+    }
 
     @KafkaListener(
             topics = "${matching.kafka.market-data-events-topic:market-data.events.v1}",

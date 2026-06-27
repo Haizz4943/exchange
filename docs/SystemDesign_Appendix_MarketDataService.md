@@ -744,9 +744,32 @@ Specific error codes:
 
 ### 7.1 Produced Events
 
+> **⚠️ NOTE (back-ported 2026-06-27 from services/marketdata/DECISIONS.md — supersedes the
+> "Outbox (durable)" strategy below for `ExternalTradeObserved`):**
+> `ExternalTradeObserved` is now **direct-produced** to `market-data.events.v1` via
+> `ephemeralKafkaTemplate` (`acks=1`, no idempotence, fire-and-forget) — it does **not** go through
+> the durable `market_data_outbox` + relay anymore. The payload stays wrapped in `EventEnvelope`
+> (eventType `ExternalTradeObservedEvent`), so the matching consumer contract is unchanged.
+> **`MarketDataFeedDegraded/Recovered` and `PairMetadataUpdated` still use the durable outbox** —
+> only the trade firehose changed.
+> - **Why the reversal of the original design (§ "Why not just direct-produce…" below):** the real
+>   per-pair trade rate is a hundreds/sec **firehose**, while the shared `OutboxRelay` publishes
+>   synchronously one-at-a-time (`send().get()`, ~58 msg/s). Write-rate ≫ publish-rate → the outbox
+>   grew without bound (observed **8.4M unpublished rows, ~6 days stale**), and because the relay
+>   drains FIFO oldest-first, Kafka's tail carried **week-old prices** → Matching filled resting
+>   orders at stale prices and live-priced orders never became eligible ("open orders never match").
+> - **Trade-off accepted:** trades are ephemeral observations (same class as depth/kline); dropping a
+>   few during a Kafka blip is acceptable, and Matching never retroactively fills from buffered trades.
+>   This trades the original durability guarantee for **bounded, always-fresh** behavior.
+> - **Topic is now a short-retention firehose:** `market-data.events.v1` is declared with
+>   `retention.ms=600000` (10 min) + `segment.ms=60000` via a `KafkaAdmin(modifyTopicConfigs=true)`
+>   + `NewTopic` in `KafkaConfig` (configurable under `market.kafka.events-topic.*`), so the topic
+>   itself can no longer grow unbounded. Consumers of external trades must process **live only**
+>   (seek-to-end), never replay — see `SystemDesign_Appendix_MatchingEngine.md §7.2`.
+
 | Event | Topic | Partition Key | Strategy | Volume (est) |
 |-------|-------|---------------|----------|--------------|
-| `ExternalTradeObserved` | `market-data.events.v1` | `pair` | Outbox (durable — Matching Engine MUST process every trade) | 5–50/sec across all pairs |
+| `ExternalTradeObserved` | `market-data.events.v1` | `pair` | **Direct produce, ephemeral** (firehose; short topic retention) — *see note above; was "Outbox (durable)"* | hundreds/sec across all pairs |
 | `DepthUpdated` | `market-data.depth.v1` | `pair` | Direct produce (ephemeral — one missed = next arrives in 100 ms) | 50/sec per pair |
 | `KlineUpdated` | `market-data.kline.v1` | `pair` | Direct produce (ephemeral) | 1/min per pair (or ~1/sec with live bar updates) |
 | `MarketDataFeedDegraded` | `market-data.events.v1` | `pair` | Outbox (durable — services must know) | Rare |

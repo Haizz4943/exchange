@@ -4,7 +4,7 @@ Per-service log of judgment calls not dictated by the specs (SRS / System Design
 API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 
 ## 2026-06-25 — Short retention on `market-data.events.v1` (bound the ephemeral firehose)
-**Status:** 🟡 Pending review
+**Status:** ✅ Back-ported 2026-06-27 → `docs/SystemDesign_Appendix_MarketDataService.md` §7.1 (NOTE callout)
 **Decision:** Added a `KafkaAdmin` (`modifyTopicConfigs(true)`) + `NewTopic` in `KafkaConfig`
 that declares `market-data.events.v1` with `retention.ms=600000` (10 min) and
 `segment.ms=60000` (1 min). Configurable under `market.kafka.events-topic.*`.
@@ -19,7 +19,7 @@ fix (matching seeks-to-end on startup so it never replays the backlog) — see
 `services/marketdata/src/main/resources/application.yml`.
 
 ## 2026-06-24 — `ExternalTradeObserved` publishes directly (ephemeral), not via durable outbox
-**Status:** 🟡 Pending review
+**Status:** ✅ Back-ported 2026-06-27 → `docs/SystemDesign_Appendix_MarketDataService.md` §7.1 (NOTE callout supersedes "Outbox (durable)" strategy)
 **Decision:** External trade observations are now published **directly** to
 `market-data.events.v1` via `ephemeralKafkaTemplate` (acks=1, no idempotence, fire-and-forget),
 through a new `MarketDataEventPublisher.publishExternalTrade(...)`. They no longer go through the

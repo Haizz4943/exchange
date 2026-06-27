@@ -7,7 +7,7 @@ API_SPEC / CLAUDE.md). Review and back-port into the official docs as needed.
 
 ## 2026-06-25 — Market-data listener seeks-to-end on startup; short retention on the topic
 
-**Status:** 🟡 Pending review
+**Status:** ✅ Back-ported 2026-06-27 → `docs/SystemDesign_Appendix_MatchingEngine.md` §7.2 (NOTE callout)
 
 **Problem.** `market-data.events.v1` is a high-rate **ephemeral firehose** of
 `ExternalTradeObservedEvent` (the producer bypasses the durable outbox on purpose — see

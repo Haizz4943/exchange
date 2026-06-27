@@ -744,6 +744,29 @@ Service must see `OrderPartiallyFilled` before `OrderFilled` (or same batch is f
 | `market-data.events.v1` | `MarketDataFeedDegraded` | `pair` | `HandleFeedDegradedUseCase` |
 | `market-data.events.v1` | `MarketDataFeedRecovered` | `pair` | `HandleFeedRecoveredUseCase` |
 
+> **⚠️ NOTE (back-ported 2026-06-27 from services/matching/DECISIONS.md):**
+> `market-data.events.v1` is an **ephemeral, short-retention firehose** of external trades (the
+> producer bypasses the durable outbox on purpose — see `SystemDesign_Appendix_MarketDataService.md
+> §7.1`). External trades are **best-effort and non-retroactive**: `MatchDispatcher.onExternalTrade`
+> / `LimitOrderMatcher` only ever apply a trade against the book *as it is at consumption time* — an
+> old trade carries an obsolete price and can only cause mis-priced fills. Therefore the matching
+> consumer of this topic must process **live only, never replay the backlog**:
+> - `MarketDataEventsConsumer` extends `AbstractConsumerSeekAware` and, in `onPartitionsAssigned`,
+>   calls `seekToEnd(...)` so every (re)assignment jumps to the log end and discards the backlog.
+>   Toggle: `matching.kafka.market-data-seek-to-end-on-start` (default `true`).
+> - **Scoped to this listener only.** `OrderEventsConsumer` (`orders.events.v1`) and the
+>   matching-outbox / `matching.events.v1` path do **not** implement `ConsumerSeekAware` — they keep
+>   committed-offset, ordered, replayable semantics. Each `@KafkaListener` is its own consumer
+>   within the `matching-engine` group, so the seek touches only market-data partitions.
+> - **Why it was needed:** the topic had no retention and grew to ~13.5M records; on restart/lag the
+>   group resumed from the committed offset and replayed millions of stale trades (measured ~98 min
+>   to catch up), filling resting orders at wrong prices. Seek-to-end fixes correctness; the short
+>   topic retention (market-data side) is defense-in-depth against unbounded disk growth.
+> - **Trade-off:** feed-health/metadata events ride the same topic, so seek-to-end skips their
+>   backlog too — matching boots with `FeedStatusRegistry` at its default **HEALTHY/fail-open** state
+>   (identical to cold-start) and re-derives status from the next transition. *(Follow-up, not done:
+>   bootstrap current feed status from market-data's health REST endpoint at startup.)*
+
 ### 7.3 Consumer Configuration
 
 ```yaml

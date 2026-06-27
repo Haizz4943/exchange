@@ -7,7 +7,7 @@ that are NOT explicitly dictated by an existing spec. Review and back-port into 
 official docs (SRS / System Design / API_SPEC) as appropriate.
 
 ## 2026-06-25 — NEW → OPEN self-transition wired in the outbox relay (publish-ack)
-**Status:** 🟡 Pending review
+**Status:** ✅ Back-ported 2026-06-27 → `docs/SRS_Appendix_OrderService.md` §5 (NOTE callout)
 **Decision:** The `NEW → OPEN` transition is performed in `OrderOutboxRelay.relay()` immediately
 after a successful Kafka publish of an `OrderPlaced` event: the relay loads the aggregate and, only
 if it is still `NEW`, calls `order.markOpen()` + saves — all inside the relay's existing

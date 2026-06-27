@@ -413,6 +413,22 @@ NEW ──→ REJECTED  (only if validation somehow fails post-commit, rare)
 
 **Note on `CANCEL_REQUESTED`:** The SRS main doc (§Appendix B) collapses this into `OPEN`/`PARTIALLY_FILLED` for simplicity. In this service's implementation, it is a distinct state to prevent duplicate cancel requests and clarify UI feedback.
 
+> **NOTE (back-ported 2026-06-27 from services/order/DECISIONS.md — SR-ORDER-EDGE-006):**
+> The `NEW → OPEN` self-transition is performed **in the outbox relay, immediately after the
+> Kafka publish-ack of `OrderPlaced`**, not at persist time. `OrderOutboxRelay.relay()` loads the
+> aggregate and, **only if it is still `NEW`**, calls `markOpen()` + saves — inside the relay's
+> existing `@Transactional`, so `markPublished` and `markOpen` commit atomically.
+> - **Guard:** any non-`NEW` state is skipped silently (no throw) — e.g. a user cancel that landed
+>   in the publish window (`→ CANCEL_REQUESTED`), or an already-`OPEN` re-relay. Only `OrderPlaced`
+>   triggers it, never `OrderCancelled`.
+> - **Why publish-ack, not persist:** per SR-ORDER-EDGE-006 the order must stay `NEW` until the
+>   event is actually published (FE shows `NEW`/"queued" while Kafka is down). Transitioning at
+>   persist time would contradict that.
+> - This closes a gap (the transition was previously unimplemented — `markOpen()` was dead code),
+>   **not a behavioural deviation** from the documented state machine. Symptom it fixed: passive
+>   `LIMIT` orders stayed `NEW` forever, so the internal open-orders projection skipped them and the
+>   Matching Engine's `IndexRebuildService` dropped them from the book on restart (`loaded=0`).
+
 > **NOTE (back-ported 2026-06-17 from services/order/DECISIONS.md):** As built, `applyFill`
 > accepts a fill from `NEW` / `OPEN` / `PARTIALLY_FILLED` **and `CANCEL_REQUESTED`**:
 > - **Terminal precedence** — a fill arriving while `CANCEL_REQUESTED` that **completes** the
